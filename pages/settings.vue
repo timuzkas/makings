@@ -67,10 +67,27 @@ async function save() {
   saving.value = false
   await refresh()
 }
+
+function resetTheme() {
+  if (!settings.value?.theme) return
+  settings.value.theme = {
+    page: '#ffffff',
+    ink: '#101010',
+    muted: '#686866',
+    line: '#dddddd',
+    chrome: '#ffffff',
+    accent: '#3a71ff',
+    grid: true,
+    gridSize: 40,
+    radius: 8,
+    rasterization: true
+  }
+}
 </script>
 
 <template>
   <main v-if="settings && profile && theme" class="page page-settings">
+    <button class="settings-reset" type="button" @click="resetTheme">reset theme</button>
     <section class="settings-column">
       <div class="settings-band">
         <input v-model="settings.name" aria-label="Name" />

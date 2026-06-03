@@ -1435,13 +1435,21 @@ button {
 .settings-band textarea,
 .theme-grid input,
 .setting-inline input,
-.font-importer input,
-.settings-save {
+.font-importer input {
   width: 100%;
   min-height: 42px;
   border: 1px solid var(--panel-border);
-  background: var(--panel-bg);
+  background: transparent;
   color: var(--panel-fg);
+  padding: 10px;
+}
+
+.settings-save {
+  width: 100%;
+  min-height: 48px;
+  border: 1px solid var(--panel-border);
+  background: var(--panel-fg);
+  color: var(--panel-bg);
   padding: 10px;
 }
 
@@ -1473,6 +1481,38 @@ button {
   background: var(--panel-bg);
   color: var(--panel-fg);
   text-align: left;
+}
+
+.page-settings .color-picker-chip,
+.page-settings .compact-select-button,
+.page-settings .font-importer button {
+  background: transparent;
+  border: 1px solid var(--panel-border);
+  color: var(--panel-fg);
+  min-height: 42px;
+  padding: 0 12px;
+}
+
+.settings-reset {
+  position: fixed;
+  right: 18px;
+  top: 18px;
+  z-index: 200;
+  height: 34px;
+  padding: 0 12px;
+  background: #000 !important;
+  color: #fff !important;
+  border: 1px solid #fff !important;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.settings-reset:hover {
+  background: #fff !important;
+  color: #000 !important;
+  border-color: #000 !important;
 }
 
 .color-picker-swatch {
