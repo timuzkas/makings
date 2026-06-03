@@ -2,6 +2,10 @@ node_modules
 .nuxt
 .output
 .git
+.agents
+.codex
 .data
 npm-debug.log
 yarn-error.log
+Dockerfile
+.dockerignore
