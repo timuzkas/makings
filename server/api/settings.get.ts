@@ -1,7 +1,7 @@
 import { getCurrentUserFromToken, getSpace } from '../data/store'
 
 export default defineEventHandler((event) => {
-  const user = getCurrentUserFromToken(getCookie(event, 'atelier_session'))
+  const user = getCurrentUserFromToken(getCookie(event, 'makings_session'))
 
   if (!user) {
     throw createError({ statusCode: 401, statusMessage: 'login_required' })

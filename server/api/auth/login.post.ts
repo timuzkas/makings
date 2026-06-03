@@ -9,7 +9,7 @@ export default defineEventHandler(async (event) => {
       password: body.password ?? ''
     })
 
-    setCookie(event, 'atelier_session', session.token, {
+    setCookie(event, 'makings_session', session.token, {
       httpOnly: true,
       sameSite: 'lax',
       path: '/',

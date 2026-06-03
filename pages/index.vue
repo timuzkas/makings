@@ -10,18 +10,42 @@ const commentDrafts = reactive<Record<string, string>>({})
 const openComments = reactive<Record<string, boolean>>({})
 const wordmark = 'makings'.split('')
 
+const previewHeights = [220, 250, 205, 180, 220, 250]
+const feedFontLinks = computed(() => {
+  const fonts = new Set<string>()
+
+  for (const fragment of fragments.value ?? []) {
+    for (const font of fragment.googleFonts ?? []) {
+      if (font.trim()) fonts.add(font.trim())
+    }
+  }
+
+  return [...fonts].map((font) => ({
+    rel: 'stylesheet',
+    href: `https://fonts.googleapis.com/css2?family=${encodeURIComponent(font).replaceAll('%20', '+')}:wght@300;400;500;600;700;800;900&display=swap`
+  }))
+})
+
+useHead(() => ({
+  link: feedFontLinks.value
+}))
+
 function fragmentKey(fragment: FeedFragment) {
   return `${fragment.handle}:${fragment.id}`
+}
+
+function previewHeight(index: number) {
+  return previewHeights[index % previewHeights.length] ?? 180
 }
 
 function feedSnippetStyle(fragment: FeedFragment, index: number) {
   const pattern = index % 6
   const wide = pattern === 0 || pattern === 4
-  const tall = pattern === 1 || pattern === 5
+  const height = previewHeight(index)
 
   return {
     gridColumn: wide ? 'span 2' : undefined,
-    '--snippet-preview-height': `${tall ? 250 : wide ? 220 : pattern === 2 ? 205 : 180}px`
+    '--snippet-preview-height': `${height}px`
   }
 }
 
@@ -113,8 +137,8 @@ function previewNodeStyle(node: CanvasNode, fragment: FeedFragment) {
   }
 }
 
-function previewWorldStyle(fragment: FeedFragment) {
-  const scale = previewScale(fragment)
+function previewWorldStyle(fragment: FeedFragment, index: number) {
+  const scale = previewScale(fragment, index)
 
   return {
     width: `${fragment.bounds.w * scale}px`,
@@ -122,8 +146,8 @@ function previewWorldStyle(fragment: FeedFragment) {
   }
 }
 
-function previewCanvasStyle(fragment: FeedFragment) {
-  const scale = previewScale(fragment)
+function previewCanvasStyle(fragment: FeedFragment, index: number) {
+  const scale = previewScale(fragment, index)
 
   return {
     width: `${fragment.bounds.w}px`,
@@ -132,10 +156,11 @@ function previewCanvasStyle(fragment: FeedFragment) {
   }
 }
 
-function previewScale(fragment: FeedFragment) {
+function previewScale(fragment: FeedFragment, index: number) {
   const width = Math.max(1, fragment.bounds.w)
   const height = Math.max(1, fragment.bounds.h)
-  return Math.min(180 / width, 180 / height)
+  const targetWidth = index % 6 === 0 || index % 6 === 4 ? 440 : 260
+  return Math.min(targetWidth / width, previewHeight(index) / height)
 }
 
 function linePoint(node: CanvasNode, point: 'start' | 'bend' | 'end', axis: 'x' | 'y') {
@@ -183,9 +208,9 @@ function linePath(node: CanvasNode) {
       >
         <NuxtLink class="snippet-link" :to="`/space/${fragment.handle}?fragment=${fragment.id}`">
           <span class="snippet-preview">
-          <span class="snippet-world" :style="previewWorldStyle(fragment)">
-          <span class="snippet-canvas" :style="previewCanvasStyle(fragment)">
-            <span
+          <span class="snippet-world" :style="previewWorldStyle(fragment, index)">
+          <span class="snippet-canvas" :style="previewCanvasStyle(fragment, index)">
+            <div
               v-for="node in fragment.nodes"
               :key="node.id"
               class="snippet-node canvas-node"
@@ -239,8 +264,9 @@ function linePath(node: CanvasNode) {
               </svg>
               <span v-else-if="node.kind === 'text'" class="node-text">{{ node.text }}</span>
               <span v-else-if="node.kind === 'portal'" class="node-portal">{{ node.text }}</span>
+              <NodeMediaContent v-else-if="node.media" :node="node" context="feed" />
               <span v-else class="node-label">{{ node.text }}</span>
-            </span>
+            </div>
           </span>
           </span>
           </span>

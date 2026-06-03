@@ -1,12 +1,12 @@
 import { clearSession } from '../../data/store'
 
 export default defineEventHandler((event) => {
-  const token = getCookie(event, 'atelier_session')
+  const token = getCookie(event, 'makings_session')
 
   if (token) {
     clearSession(token)
   }
 
-  deleteCookie(event, 'atelier_session', { path: '/' })
+  deleteCookie(event, 'makings_session', { path: '/' })
   return { ok: true }
 })

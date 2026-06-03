@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import type { CanvasNode, SpaceRecord } from '../types/canvas'
+import type { CanvasNode, SpaceLink, SpaceRecord } from '../types/canvas'
 
 interface SettingsPayload {
   handle: string
   name: string
-  bio?: string
   status?: string
-  links?: string[]
+  links?: SpaceLink[]
   googleFonts?: string[]
   theme?: SpaceRecord['theme']
   profile?: CanvasNode
@@ -26,12 +25,58 @@ const themePresets = computed(() => theme.value ? [
   { key: 'chrome', label: 'chrome', value: theme.value.chrome },
   { key: 'accent', label: 'accent', value: theme.value.accent }
 ] : [])
+const editableLinks = computed(() => (settings.value?.links ?? []).map(normalizeLink))
 
 function splitCsv(value?: string) {
   return (value ?? '')
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean)
+}
+
+function normalizeLink(link: SpaceLink) {
+  if (typeof link === 'string') {
+    return {
+      label: linkLabel(link),
+      url: link
+    }
+  }
+
+  return {
+    label: link.label ?? '',
+    url: link.url
+  }
+}
+
+function normalizeLinks(links: SpaceLink[] = []) {
+  return links
+    .map(normalizeLink)
+    .map((link) => ({
+      label: link.label.trim(),
+      url: link.url.trim()
+    }))
+    .filter((link) => link.url)
+}
+
+function linkLabel(link: string) {
+  return link.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/$/, '')
+}
+
+function patchLink(index: number, patch: Partial<{ label: string, url: string }>) {
+  if (!settings.value) return
+  const links = editableLinks.value
+  links[index] = { ...links[index], ...patch }
+  settings.value.links = links
+}
+
+function addLink() {
+  if (!settings.value) return
+  settings.value.links = [...editableLinks.value, { label: '', url: '' }]
+}
+
+function removeLink(index: number) {
+  if (!settings.value) return
+  settings.value.links = editableLinks.value.filter((_, linkIndex) => linkIndex !== index)
 }
 
 function patchProfile(patch: Partial<CanvasNode>) {
@@ -62,7 +107,10 @@ async function save() {
   saving.value = true
   await $fetch('/api/settings', {
     method: 'PATCH',
-    body: settings.value
+    body: {
+      ...settings.value,
+      links: normalizeLinks(settings.value.links)
+    }
   })
   saving.value = false
   await refresh()
@@ -90,21 +138,52 @@ function resetTheme() {
     <button class="settings-reset" type="button" @click="resetTheme">reset theme</button>
     <section class="settings-column">
       <div class="settings-band">
-        <input v-model="settings.name" aria-label="Name" />
-        <input v-model="settings.status" aria-label="Status" />
-        <textarea v-model="settings.bio" aria-label="Bio" rows="4" />
-        <input
-          :value="settings.links?.join(', ')"
-          aria-label="Links"
-          @input="settings.links = splitCsv(($event.target as HTMLInputElement).value)"
-        />
+        <label class="settings-field">
+          <span>space name</span>
+          <input v-model="settings.name" aria-label="Name" placeholder="Public name for your space" />
+        </label>
+        <label class="settings-field">
+          <span>status</span>
+          <input v-model="settings.status" aria-label="Status" placeholder="Short line shown near your handle" />
+        </label>
+        <div class="settings-field">
+          <span>links</span>
+          <div v-for="(link, index) in editableLinks" :key="index" class="settings-link-row">
+            <input
+              :value="link.label"
+              :aria-label="`Link ${index + 1} display name`"
+              placeholder="display name"
+              @input="patchLink(index, { label: ($event.target as HTMLInputElement).value })"
+            />
+            <input
+              :value="link.url"
+              :aria-label="`Link ${index + 1} URL`"
+              placeholder="https://example.com"
+              @input="patchLink(index, { url: ($event.target as HTMLInputElement).value })"
+            />
+            <button type="button" aria-label="Remove link" @click="removeLink(index)">x</button>
+          </div>
+          <button type="button" class="settings-add-link" @click="addLink">add link</button>
+        </div>
       </div>
 
       <div class="settings-band">
-        <input :value="profile.avatar" aria-label="Avatar" @input="patchProfile({ avatar: ($event.target as HTMLInputElement).value })" />
-        <input :value="profile.nickname" aria-label="Nickname" @input="patchProfile({ nickname: ($event.target as HTMLInputElement).value })" />
-        <textarea :value="profile.description" aria-label="Description" rows="4" @input="patchProfile({ description: ($event.target as HTMLTextAreaElement).value })" />
-        <input :value="profile.tags?.join(', ')" aria-label="Tags" @input="patchProfile({ tags: splitCsv(($event.target as HTMLInputElement).value) })" />
+        <label class="settings-field">
+          <span>profile avatar</span>
+          <input :value="profile.avatar" aria-label="Avatar" placeholder="Image URL for your profile node" @input="patchProfile({ avatar: ($event.target as HTMLInputElement).value })" />
+        </label>
+        <label class="settings-field">
+          <span>profile name</span>
+          <input :value="profile.nickname" aria-label="Nickname" placeholder="Name shown inside profile nodes" @input="patchProfile({ nickname: ($event.target as HTMLInputElement).value })" />
+        </label>
+        <label class="settings-field">
+          <span>profile description</span>
+          <textarea :value="profile.description" aria-label="Description" rows="4" placeholder="Short profile text for profile nodes" @input="patchProfile({ description: ($event.target as HTMLTextAreaElement).value })" />
+        </label>
+        <label class="settings-field">
+          <span>profile tags</span>
+          <input :value="profile.tags?.join(', ')" aria-label="Tags" placeholder="design, research, music" @input="patchProfile({ tags: splitCsv(($event.target as HTMLInputElement).value) })" />
+        </label>
       </div>
     </section>
 
@@ -127,11 +206,11 @@ function resetTheme() {
         </label>
         <label class="setting-inline">
           <span>grid size</span>
-          <input :value="theme.gridSize" type="number" min="12" @input="patchTheme('gridSize', Number(($event.target as HTMLInputElement).value))" />
+          <input :value="theme.gridSize" type="number" min="12" placeholder="40" @input="patchTheme('gridSize', Number(($event.target as HTMLInputElement).value))" />
         </label>
         <label class="setting-inline">
           <span>radius</span>
-          <input :value="theme.radius" type="number" min="0" @input="patchTheme('radius', Number(($event.target as HTMLInputElement).value))" />
+          <input :value="theme.radius" type="number" min="0" placeholder="8" @input="patchTheme('radius', Number(($event.target as HTMLInputElement).value))" />
         </label>
         <label class="setting-inline">
           <span>rasterization</span>

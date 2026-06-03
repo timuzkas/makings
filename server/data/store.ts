@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import type { AuthUser, CanvasFragment, CanvasNode, FeedFragment, PostComment, PublicUser, SpaceRecord, SpaceSummary } from '../../types/canvas'
+import { cleanupSpaceMedia, normalizeSpaceNodes } from '../utils/media'
 
 const dbPath = join(process.cwd(), '.data', 'spaces.json')
 const socialPath = join(process.cwd(), '.data', 'social.json')
@@ -153,7 +154,11 @@ const defaultSpaces: SpaceRecord[] = [
     status: 'open for remix',
     followers: 1842,
     following: 219,
-    links: ['portfolio', 'soundcloud', 'newsletter'],
+    links: [
+      { label: 'portfolio', url: 'https://example.com' },
+      { label: 'soundcloud', url: 'https://soundcloud.com' },
+      { label: 'newsletter', url: 'https://example.com/newsletter' }
+    ],
     googleFonts: [],
     theme: {
       page: '#ffffff',
@@ -296,7 +301,7 @@ function normalizeSpace(space: SpaceRecord): SpaceRecord {
   const fallback = defaultSpaces.find((item) => item.handle === space.handle) ?? defaultSpaces[0]
   const profileFallback = fallback.nodes.find((node) => node.id === 'user-card')
 
-  return {
+  return normalizeSpaceNodes({
     ...fallback,
     ...space,
     theme: {
@@ -319,7 +324,7 @@ function normalizeSpace(space: SpaceRecord): SpaceRecord {
         showTags: node.showTags ?? true
       }
     })
-  }
+  })
 }
 
 function nodesInFragment(nodes: CanvasNode[], fragment: CanvasFragment) {
@@ -352,6 +357,7 @@ export function listFeed(token?: string) {
       return {
         ...fragment,
         nodes: nodesInFragment(space.nodes, fragment),
+        googleFonts: space.googleFonts ?? [],
         likes: social.likes.filter((like) => like.fragmentKey === key).length,
         likedByMe: viewer ? social.likes.some((like) => like.from === viewer.handle && like.fragmentKey === key) : false,
         comments: comments.slice(-3),
@@ -403,7 +409,7 @@ export function saveSpace(handle: string, incoming: Partial<SpaceRecord>) {
   }
 
   const current = spaces[index]
-  const next = {
+  const next = normalizeSpaceNodes({
     ...current,
     ...incoming,
     handle: current.handle,
@@ -412,10 +418,11 @@ export function saveSpace(handle: string, incoming: Partial<SpaceRecord>) {
     triggers: incoming.triggers ?? current.triggers,
     googleFonts: incoming.googleFonts ?? current.googleFonts,
     theme: incoming.theme ?? current.theme
-  }
+  })
 
   spaces[index] = next
   writeDb(spaces)
+  cleanupSpaceMedia(handle, next.nodes)
   return next
 }
 

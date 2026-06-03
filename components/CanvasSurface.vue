@@ -1,11 +1,13 @@
 <script setup lang="ts">
 import type { CanvasAction, CanvasFragment, CanvasNode, CanvasTrigger } from '../types/canvas'
+import { mediaKindFromNodeKind, normalizeMediaRef } from '../utils/media'
 
 const props = defineProps<{
   nodes: CanvasNode[]
   fragments: CanvasFragment[]
   triggers: CanvasTrigger[]
   mode: 'view' | 'edit'
+  spaceHandle?: string
   activeId?: string
   rasterization?: boolean
 }>()
@@ -656,6 +658,23 @@ function onResizePointerDown(
 
 function onNodeClick(node: CanvasNode) {
   if (props.mode === 'view') {
+    if (node.kind === 'portal') {
+      const targetHandle = node.portalTargetSpaceHandle?.trim() || props.spaceHandle || ''
+      const targetFragmentId = node.portalTargetFragmentId?.trim() || ''
+
+      if (targetHandle) {
+        if (targetHandle === props.spaceHandle && targetFragmentId) {
+          focusFragment(targetFragmentId)
+        } else {
+          void navigateTo({
+            path: `/space/${targetHandle}`,
+            query: targetFragmentId ? { fragment: targetFragmentId } : undefined
+          })
+        }
+      } else if (targetFragmentId) {
+        focusFragment(targetFragmentId)
+      }
+    }
     runTriggers('click', node.id)
   }
 }
@@ -697,16 +716,35 @@ function addNode(kind: CanvasNode['kind']) {
   pushHistory()
 
   const z = Math.max(...localNodes.value.map((node) => node.z), 0) + 1
-  const node: CanvasNode = {
+  const center = viewportCenterWorldPosition()
+  const width = kind === 'text' ? 280 : kind === 'line' ? 260 : 220
+  const height = kind === 'text' ? 120 : kind === 'line' ? 80 : 180
+  const node = buildNode(kind, {
+    x: center.x - width / 2,
+    y: center.y - height / 2,
+    z
+  })
+
+  localNodes.value.push(node)
+  select(node)
+  sync()
+  return node
+}
+
+function buildNode(kind: CanvasNode['kind'], patch: Partial<CanvasNode> = {}): CanvasNode {
+  const width = kind === 'text' ? 280 : kind === 'line' ? 260 : 220
+  const height = kind === 'text' ? 120 : kind === 'line' ? 80 : 180
+
+  return {
     id: `${kind}-${crypto.randomUUID().slice(0, 8)}`,
     kind,
     label: kind,
-    x: -viewport.x / viewport.zoom + 80,
-    y: -viewport.y / viewport.zoom + 80,
-    w: kind === 'text' ? 280 : kind === 'line' ? 260 : 220,
-    h: kind === 'text' ? 120 : kind === 'line' ? 80 : 180,
+    x: 0,
+    y: 0,
+    w: width,
+    h: height,
     scale: 1,
-    z,
+    z: Math.max(...localNodes.value.map((node) => node.z), 0) + 1,
     text: kind,
     arrowEnd: kind === 'line',
     arrowHeadStyle: kind === 'line' ? 'filled' : undefined,
@@ -728,12 +766,9 @@ function addNode(kind: CanvasNode['kind']) {
     layout: 'center',
     effect: 'none',
     animation: 'none',
-    animationMs: 1800
+    animationMs: 1800,
+    ...patch
   }
-
-  localNodes.value.push(node)
-  select(node)
-  sync()
 }
 
 function updateSelected(patch: Partial<CanvasNode>) {
@@ -799,15 +834,55 @@ function screenRectToWorldBounds(rect: { x: number; y: number; w: number; h: num
   }
 }
 
+function worldPointFromClient(point: { x: number; y: number }) {
+  const stage = stageRef.value
+  if (!stage) return { x: 0, y: 0 }
+
+  const stageRect = stage.getBoundingClientRect()
+  return {
+    x: Math.round((point.x - stageRect.left - viewport.x) / viewport.zoom),
+    y: Math.round((point.y - stageRect.top - viewport.y) / viewport.zoom)
+  }
+}
+
+function viewportCenterWorldPosition() {
+  const stage = stageRef.value
+  if (!stage) return { x: 0, y: 0 }
+
+  const stageRect = stage.getBoundingClientRect()
+  const center = worldPointFromClient({
+    x: stageRect.left + stageRect.width / 2,
+    y: stageRect.top + stageRect.height / 2
+  })
+
+  return center
+}
+
+function addNodeAt(kind: CanvasNode['kind'], point: { x: number; y: number }, patch: Partial<CanvasNode> = {}) {
+  pushHistory()
+  const world = worldPointFromClient(point)
+  const node = buildNode(kind, {
+    x: world.x,
+    y: world.y,
+    ...patch
+  })
+  localNodes.value.push(node)
+  select(node)
+  sync()
+  return node
+}
+
 defineExpose({
   addNode,
+  addNodeAt,
   updateSelected,
   removeSelected,
   duplicateSelected,
   bringForward,
   sendBackward,
   focusFragment,
-  screenRectToWorldBounds
+  screenRectToWorldBounds,
+  worldPointFromClient
 })
 
 onMounted(() => {
@@ -936,6 +1011,10 @@ onBeforeUnmount(() => {
           </template>
         </template>
         <span v-else-if="node.kind === 'portal'" class="node-portal">{{ node.text }}</span>
+        <NodeMediaContent
+          v-else-if="normalizeMediaRef(node.media, mediaKindFromNodeKind(node.kind) ?? undefined)"
+          :node="node"
+        />
         <span v-else class="node-label">{{ node.text }}</span>
 
         <template v-if="mode === 'edit' && selectedId === node.id && node.kind !== 'line'">

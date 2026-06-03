@@ -1,4 +1,7 @@
 export type NodeKind = 'profile' | 'text' | 'shape' | 'line' | 'image' | 'video' | 'audio' | 'portal'
+export type NodeMediaMode = 'upload' | 'embed'
+export type NodeMediaKind = 'image' | 'audio' | 'video'
+export type NodeMediaProvider = 'direct' | 'youtube' | 'vimeo'
 
 export type TriggerType = 'click' | 'hover' | 'load' | 'message'
 
@@ -18,6 +21,21 @@ export type NodeLayout = 'center' | 'start' | 'end' | 'stretch'
 
 export type NodeAnimation = 'none' | 'pulse' | 'float' | 'spin' | 'breathe' | 'jitter'
 
+export interface NodeMediaRef {
+  id?: string
+  mode: NodeMediaMode
+  kind: NodeMediaKind
+  src: string
+  provider: NodeMediaProvider
+  mimeType?: string
+  bytes?: number
+  width?: number
+  height?: number
+  durationMs?: number
+  originalName?: string
+  posterSrc?: string
+}
+
 export interface CanvasNode {
   id: string
   kind: NodeKind
@@ -33,11 +51,13 @@ export interface CanvasNode {
   locked?: boolean
   interpolate?: boolean
   text?: string
-  media?: string
+  media?: NodeMediaRef | string
   avatar?: string
   nickname?: string
   description?: string
   tags?: string[]
+  portalTargetSpaceHandle?: string
+  portalTargetFragmentId?: string
   showAvatar?: boolean
   showNickname?: boolean
   showDescription?: boolean
@@ -91,6 +111,7 @@ export interface CanvasFragment {
 
 export interface FeedFragment extends CanvasFragment {
   nodes: CanvasNode[]
+  googleFonts?: string[]
   likes?: number
   likedByMe?: boolean
   comments?: PostComment[]
@@ -116,6 +137,11 @@ export interface AuthUser extends PublicUser {
   following: string[]
 }
 
+export type SpaceLink = string | {
+  label?: string
+  url: string
+}
+
 export interface SpaceSummary {
   handle: string
   name: string
@@ -123,7 +149,7 @@ export interface SpaceSummary {
   status?: string
   followers?: number
   following?: number
-  links?: string[]
+  links?: SpaceLink[]
   googleFonts?: string[]
   theme?: SpaceRecord['theme']
   fragments: CanvasFragment[]
@@ -157,7 +183,7 @@ export interface SpaceRecord {
   status?: string
   followers?: number
   following?: number
-  links?: string[]
+  links?: SpaceLink[]
   googleFonts?: string[]
   theme?: {
     page: string

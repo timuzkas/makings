@@ -6,7 +6,14 @@ export default defineNuxtConfig({
   },
   app: {
     head: {
-      title: 'Atelier Canvas Network',
+      title: 'Makings',
+      link: [
+        {
+          rel: 'icon',
+          type: 'image/svg+xml',
+          href: '/favicon.svg'
+        }
+      ],
       meta: [
         {
           name: 'viewport',

@@ -1,5 +1,5 @@
 import { listSpaces } from '../data/store'
 
 export default defineEventHandler((event) => {
-  return listSpaces(getCookie(event, 'atelier_session'))
+  return listSpaces(getCookie(event, 'makings_session'))
 })

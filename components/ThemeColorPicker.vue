@@ -17,7 +17,7 @@ const props = withDefaults(defineProps<{
     { label: 'muted', value: 'var(--muted)' },
     { label: 'line', value: 'var(--line)' },
     { label: 'chrome', value: 'var(--chrome)' },
-    { label: 'accent', value: 'var(--blue)' }
+    { label: 'accent', value: 'var(--accent)' }
   ]
 })
 
@@ -33,9 +33,25 @@ const popoverStyle = reactive({
   left: '0px',
   width: '380px'
 })
+const hexDraft = ref(props.modelValue)
+const normalizedHex = computed(() => normalizeHex(props.modelValue))
+const colorInputValue = computed(() => normalizedHex.value ?? '#000000')
+
+function normalizeHex(value: string) {
+  const match = value.trim().match(/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i)
+  if (!match) return ''
+  const hex = match[1]
+  return `#${hex.length === 3 ? hex.split('').map((char) => char + char).join('') : hex}`.toLowerCase()
+}
 
 function pick(value: string) {
   emit('update:modelValue', value)
+}
+
+function pickHex(value: string) {
+  hexDraft.value = value
+  const hex = normalizeHex(value)
+  if (hex) pick(hex)
 }
 
 function updatePosition() {
@@ -85,6 +101,10 @@ watch(open, async (nextOpen) => {
   window.addEventListener('resize', updatePosition)
   window.addEventListener('scroll', updatePosition, true)
 })
+
+watch(() => props.modelValue, (value) => {
+  hexDraft.value = value
+})
 </script>
 
 <template>
@@ -103,8 +123,16 @@ watch(open, async (nextOpen) => {
     <Teleport to="body">
       <div ref="popover" v-show="open" class="color-picker-popover" :style="popoverStyle" aria-label="Theme colors">
         <label class="color-picker-head">
-          <span>rgb</span>
-          <input :value="modelValue" type="color" @input="pick(($event.target as HTMLInputElement).value)" />
+          <span>hex</span>
+          <input
+            :value="hexDraft"
+            class="color-picker-hex"
+            inputmode="text"
+            placeholder="#101010"
+            spellcheck="false"
+            @input="pickHex(($event.target as HTMLInputElement).value)"
+          />
+          <input :value="colorInputValue" type="color" @input="pick(($event.target as HTMLInputElement).value)" />
         </label>
         <div class="color-picker-swatches">
           <button

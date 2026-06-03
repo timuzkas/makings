@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import type { ActionType, AuthUser, CanvasNode, CanvasTrigger, SpaceRecord, TriggerType } from '../../types/canvas'
+import type { ActionType, AuthUser, CanvasNode, CanvasTrigger, NodeMediaKind, NodeMediaRef, SpaceLink, SpaceRecord, TriggerType } from '../../types/canvas'
+import { MAX_MEDIA_BYTES, mediaKindFromNodeKind, normalizeMediaRef } from '../../utils/media'
 
 const route = useRoute()
 const handle = computed(() => String(route.params.handle))
@@ -7,8 +8,12 @@ const surface = ref()
 const mode = ref<'view' | 'edit'>('view')
 const selected = ref<CanvasNode | null>(null)
 const saving = ref(false)
+const mediaBusy = ref(false)
+const mediaError = ref('')
 const followPending = ref(false)
 const googleFontName = ref('')
+const mediaDraftUrl = ref('')
+const mediaInput = ref<HTMLInputElement | null>(null)
 const capturing = ref(false)
 const effectSettingsOpen = ref(false)
 const captureFrame = reactive({
@@ -102,6 +107,36 @@ const themePresets = computed(() => {
     { key: 'accent', label: 'accent', value: theme.accent }
   ]
 })
+const spaceThemeStyle = computed(() => {
+  const theme = space.value?.theme
+  if (!theme) return {}
+
+  return {
+    '--page': theme.page,
+    '--ink': theme.ink,
+    '--muted': theme.muted,
+    '--line': theme.line,
+    '--line-dark': theme.ink,
+    '--chrome': theme.chrome,
+    '--accent': theme.accent,
+    '--blue': theme.accent,
+    '--panel-bg': 'color-mix(in srgb, var(--page) 88%, var(--ink) 12%)',
+    '--panel-fg': 'var(--ink)',
+    '--panel-muted': 'color-mix(in srgb, var(--ink) 58%, var(--page) 42%)',
+    '--panel-border': 'color-mix(in srgb, var(--ink) 78%, var(--page) 22%)',
+    '--control-bg': 'var(--panel-bg)',
+    '--control-fg': 'var(--panel-fg)',
+    '--control-muted': 'var(--panel-muted)',
+    '--control-border': 'var(--panel-border)',
+    '--control-active-bg': 'var(--ink)',
+    '--control-active-fg': 'var(--page)',
+    '--control-accent': 'var(--accent)',
+    '--control-accent-soft': 'color-mix(in srgb, var(--accent) 16%, var(--panel-bg))',
+    '--app-grid-size': `${theme.gridSize}px`,
+    '--app-radius': `${theme.radius}px`,
+    '--grid-opacity': theme.grid ? 1 : 0
+  }
+})
 
 useHead(() => ({
   link: googleFontLinks.value
@@ -182,6 +217,8 @@ const triggerPropertyOptions = computed(() => triggerProperties.map((property) =
   label: property,
   value: property
 })))
+const selectedMediaKind = computed(() => selected.value ? mediaKindFromNodeKind(selected.value.kind) : null)
+const selectedMedia = computed(() => selected.value ? normalizeMediaRef(selected.value.media, selectedMediaKind.value ?? undefined) : undefined)
 const selectedTriggers = computed(() => {
   if (!selected.value || !space.value) return []
   return space.value.triggers.filter((trigger) => trigger.sourceId === selected.value?.id)
@@ -217,6 +254,8 @@ function setNodes(nodes: CanvasNode[]) {
 
 function selectNode(node: CanvasNode | null) {
   selected.value = node
+  mediaDraftUrl.value = normalizeMediaRef(node?.media, mediaKindFromNodeKind(node?.kind ?? 'text') ?? undefined)?.src ?? ''
+  mediaError.value = ''
   triggerDraft.targetId = node?.id ?? ''
   triggerDraft.fragmentId = space.value?.fragments[0]?.id ?? ''
   editingTriggerId.value = ''
@@ -224,8 +263,40 @@ function selectNode(node: CanvasNode | null) {
 
 function patchSelected(patch: Partial<CanvasNode>) {
   if (!selected.value) return
+  if (patch.kind) {
+    const nextKind = mediaKindFromNodeKind(patch.kind)
+    const currentMedia = normalizeMediaRef(selected.value.media, selectedMediaKind.value ?? undefined)
+    if (!nextKind) {
+      patch.media = undefined
+    } else if (currentMedia && currentMedia.kind !== nextKind) {
+      patch.media = undefined
+    }
+  }
   selected.value = { ...selected.value, ...patch }
   surface.value?.updateSelected(patch)
+}
+
+function patchPortalTargetSpaceHandle(value: string) {
+  const trimmed = value.trim().toLowerCase()
+  patchSelected({ portalTargetSpaceHandle: trimmed || undefined })
+}
+
+function patchPortalTargetFragmentId(value: string) {
+  const trimmed = value.trim()
+  patchSelected({ portalTargetFragmentId: trimmed || undefined })
+}
+
+function linkHref(link: SpaceLink) {
+  const raw = typeof link === 'string' ? link : link.url
+  const trimmed = raw.trim()
+  if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) return trimmed
+  return `https://${trimmed}`
+}
+
+function linkLabel(link: SpaceLink) {
+  if (typeof link !== 'string' && link.label?.trim()) return link.label.trim()
+  const raw = typeof link === 'string' ? link : link.url
+  return raw.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/\/$/, '')
 }
 
 async function toggleFollowSpace() {
@@ -543,28 +614,435 @@ async function save() {
   if (!space.value || !canEdit.value) return
   await persistSpace()
 }
+
+function openMediaPicker() {
+  const kind = selectedMediaKind.value
+  if (!kind) {
+    mediaError.value = 'Select an image, audio, or video node first.'
+    return
+  }
+
+  if (!canEdit.value || mode.value !== 'edit') {
+    mediaError.value = 'Switch to edit mode before uploading media.'
+    return
+  }
+
+  mediaError.value = ''
+  if (mediaInput.value) {
+    mediaInput.value.value = ''
+    mediaInput.value.click()
+  }
+}
+
+async function onMediaFileChange(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  input.value = ''
+  if (!file) return
+  await applyFileToCanvas(file)
+}
+
+async function applyEmbedLink() {
+  const kind = selectedMediaKind.value
+  if (!selected.value || !kind) return
+
+  const rawUrl = mediaDraftUrl.value.trim()
+  if (!rawUrl) {
+    patchSelected({ media: undefined })
+    return
+  }
+
+  mediaBusy.value = true
+  mediaError.value = ''
+
+  try {
+    const result = await $fetch<{ media: NodeMediaRef }>('/api/media/normalize', {
+      method: 'POST',
+      body: {
+        url: rawUrl,
+        kind
+      }
+    })
+
+    patchSelected({
+      text: '',
+      media: result.media
+    })
+    mediaDraftUrl.value = result.media.src
+  } catch (error: any) {
+    mediaError.value = error?.data?.statusMessage ?? 'Use a direct media URL or a supported video link.'
+  } finally {
+    mediaBusy.value = false
+  }
+}
+
+async function applyFileToCanvas(file: File, point?: { x: number; y: number }) {
+  if (!space.value || !canEdit.value || mode.value !== 'edit') return
+
+  const kind = mediaKindFromFile(file)
+  if (!kind) {
+    mediaError.value = 'Only image, audio, and video files are supported.'
+    return
+  }
+
+  mediaBusy.value = true
+  mediaError.value = ''
+
+  try {
+    const prepared = await prepareUploadCandidate(file, kind)
+    if (prepared.file.size > MAX_MEDIA_BYTES) {
+      throw new Error('This file can’t fit the free-tier upload limit. Use an embed link.')
+    }
+
+    const form = new FormData()
+    form.set('space', space.value.handle)
+    form.set('kind', kind)
+    form.set('file', prepared.file, prepared.file.name)
+    if (prepared.width) form.set('width', String(prepared.width))
+    if (prepared.height) form.set('height', String(prepared.height))
+    if (prepared.durationMs) form.set('durationMs', String(prepared.durationMs))
+
+    const result = await $fetch<{ media: NodeMediaRef }>('/api/media/upload', {
+      method: 'POST',
+      body: form
+    })
+
+    if (selected.value && selectedMediaKind.value === kind) {
+      patchSelected({
+        text: '',
+        media: result.media
+      })
+    } else {
+      const targetPoint = point ?? {
+        x: Math.round(window.innerWidth / 2),
+        y: Math.round(window.innerHeight / 2)
+      }
+      surface.value?.addNodeAt(kind, targetPoint, {
+        text: '',
+        media: result.media
+      })
+    }
+
+    mediaDraftUrl.value = result.media.src
+  } catch (error: any) {
+    mediaError.value = error?.data?.statusMessage ?? error?.message ?? 'Media upload failed.'
+  } finally {
+    mediaBusy.value = false
+  }
+}
+
+async function prepareUploadCandidate(file: File, kind: NodeMediaKind) {
+  if (file.size <= MAX_MEDIA_BYTES) {
+    return {
+      file,
+      ...(await readMediaMetrics(file, kind))
+    }
+  }
+
+  if (kind === 'image' && file.type !== 'image/gif') {
+    const compressed = await compressImageFile(file)
+    if (compressed) {
+      return {
+        file: compressed,
+        ...(await readMediaMetrics(compressed, kind))
+      }
+    }
+  }
+
+  if (kind === 'audio' || kind === 'video') {
+    const transcoded = await transcodeMediaFile(file, kind)
+    if (transcoded) {
+      return {
+        file: transcoded,
+        ...(await readMediaMetrics(transcoded, kind))
+      }
+    }
+  }
+
+  throw new Error('This file can’t fit the free-tier upload limit. Use an embed link.')
+}
+
+async function compressImageFile(file: File) {
+  const image = await loadImage(file)
+  const hasTransparency = imageHasTransparency(image)
+  const widths = [image.naturalWidth, 1600, 1280, 960, 720, 540, 420]
+    .filter((value, index, items) => value > 0 && items.indexOf(value) === index)
+    .sort((a, b) => b - a)
+
+  for (const width of widths) {
+    const scale = Math.min(1, width / image.naturalWidth)
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale))
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale))
+
+    const context = canvas.getContext('2d')
+    if (!context) continue
+
+    context.drawImage(image, 0, 0, canvas.width, canvas.height)
+    const mimeTypes = hasTransparency ? ['image/webp', 'image/png'] : ['image/webp', 'image/jpeg']
+    const qualities = hasTransparency ? [0.82, 0.72, 0.62] : [0.84, 0.74, 0.64, 0.54]
+
+    for (const mimeType of mimeTypes) {
+      for (const quality of qualities) {
+        const blob = await canvasToBlob(canvas, mimeType, quality)
+        if (blob && blob.size <= MAX_MEDIA_BYTES) {
+          return new File([blob], renameFile(file.name, mimeType), { type: mimeType })
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+async function transcodeMediaFile(file: File, kind: 'audio' | 'video') {
+  if (!('MediaRecorder' in window)) return null
+
+  const element = document.createElement(kind)
+  element.preload = 'auto'
+  if (kind === 'video') {
+    element.muted = true
+    element.playsInline = true
+  }
+
+  const objectUrl = URL.createObjectURL(file)
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      element.src = objectUrl
+      element.onloadedmetadata = () => resolve()
+      element.onerror = () => reject(new Error('Unable to read media file.'))
+    })
+
+    const stream = typeof element.captureStream === 'function' ? element.captureStream() : null
+    if (!stream) return null
+
+    const mimeType = pickRecorderMimeType(kind)
+    if (!mimeType) return null
+
+    const chunks: BlobPart[] = []
+    const recorder = new MediaRecorder(stream, {
+      mimeType,
+      audioBitsPerSecond: kind === 'audio' ? 48_000 : 56_000,
+      videoBitsPerSecond: kind === 'video' ? 180_000 : undefined
+    })
+
+    recorder.addEventListener('dataavailable', (event) => {
+      if (event.data.size) chunks.push(event.data)
+    })
+
+    const stopped = new Promise<Blob>((resolve) => {
+      recorder.addEventListener('stop', () => resolve(new Blob(chunks, { type: mimeType })), { once: true })
+    })
+
+    recorder.start(250)
+    await element.play().catch(() => undefined)
+    await waitForPlaybackToFinish(element)
+    if (recorder.state !== 'inactive') recorder.stop()
+    const blob = await stopped
+    if (!blob.size || blob.size > MAX_MEDIA_BYTES) return null
+
+    return new File([blob], renameFile(file.name, mimeType), { type: mimeType })
+  } finally {
+    URL.revokeObjectURL(objectUrl)
+  }
+}
+
+function pickRecorderMimeType(kind: 'audio' | 'video') {
+  const candidates = kind === 'audio'
+    ? ['audio/webm;codecs=opus', 'audio/webm', 'audio/ogg;codecs=opus']
+    : ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
+
+  return candidates.find((candidate) => MediaRecorder.isTypeSupported(candidate)) ?? null
+}
+
+function waitForPlaybackToFinish(element: HTMLMediaElement) {
+  const durationMs = Number.isFinite(element.duration) ? element.duration * 1000 : 0
+  const timeoutMs = Math.max(1000, Math.min(15000, durationMs + 1000))
+
+  return new Promise<void>((resolve) => {
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      element.pause()
+      element.removeEventListener('ended', finish)
+      window.clearTimeout(timeout)
+      resolve()
+    }
+
+    const timeout = window.setTimeout(finish, timeoutMs)
+    element.addEventListener('ended', finish, { once: true })
+  })
+}
+
+async function readMediaMetrics(file: File, kind: NodeMediaKind) {
+  if (kind === 'image') {
+    const image = await loadImage(file)
+    return {
+      width: image.naturalWidth,
+      height: image.naturalHeight
+    }
+  }
+
+  const media = await loadMediaElement(file, kind)
+  return {
+    width: kind === 'video' ? (media as HTMLVideoElement).videoWidth : undefined,
+    height: kind === 'video' ? (media as HTMLVideoElement).videoHeight : undefined,
+    durationMs: Number.isFinite(media.duration) ? Math.round(media.duration * 1000) : undefined
+  }
+}
+
+function loadImage(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image()
+    const objectUrl = URL.createObjectURL(file)
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl)
+      resolve(image)
+    }
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error('Unable to read image.'))
+    }
+    image.src = objectUrl
+  })
+}
+
+function imageHasTransparency(image: HTMLImageElement) {
+  const canvas = document.createElement('canvas')
+  canvas.width = Math.min(64, image.naturalWidth)
+  canvas.height = Math.min(64, image.naturalHeight)
+  const context = canvas.getContext('2d', { willReadFrequently: true })
+  if (!context) return false
+  context.drawImage(image, 0, 0, canvas.width, canvas.height)
+  const { data } = context.getImageData(0, 0, canvas.width, canvas.height)
+  for (let index = 3; index < data.length; index += 4) {
+    if (data[index] < 255) return true
+  }
+  return false
+}
+
+function canvasToBlob(canvas: HTMLCanvasElement, mimeType: string, quality?: number) {
+  return new Promise<Blob | null>((resolve) => {
+    canvas.toBlob((blob) => resolve(blob), mimeType, quality)
+  })
+}
+
+function renameFile(fileName: string, mimeType: string) {
+  const stem = fileName.replace(/\.[^.]+$/, '') || 'media'
+  const ext = mimeType.split('/')[1]?.split(';')[0]?.replace('mpeg', 'mp3')?.replace('jpeg', 'jpg') ?? 'bin'
+  return `${stem}.${ext}`
+}
+
+function loadMediaElement(file: File, kind: 'audio' | 'video') {
+  return new Promise<HTMLMediaElement>((resolve, reject) => {
+    const element = document.createElement(kind)
+    const objectUrl = URL.createObjectURL(file)
+    element.preload = 'auto'
+    element.onloadedmetadata = () => {
+      URL.revokeObjectURL(objectUrl)
+      resolve(element)
+    }
+    element.onerror = () => {
+      URL.revokeObjectURL(objectUrl)
+      reject(new Error('Unable to read media.'))
+    }
+    element.src = objectUrl
+  })
+}
+
+function mediaKindFromFile(file: File): NodeMediaKind | null {
+  if (file.type.startsWith('image/')) return 'image'
+  if (file.type.startsWith('audio/')) return 'audio'
+  if (file.type.startsWith('video/')) return 'video'
+  return null
+}
+
+function onPaste(event: ClipboardEvent) {
+  if (!canEdit.value || mode.value !== 'edit') return
+  const file = [...(event.clipboardData?.files ?? [])][0]
+  if (!file) return
+  event.preventDefault()
+  void applyFileToCanvas(file)
+}
+
+function onDrop(event: DragEvent) {
+  if (!canEdit.value || mode.value !== 'edit') return
+  const file = event.dataTransfer?.files?.[0]
+  if (!file) return
+  event.preventDefault()
+  void applyFileToCanvas(file, {
+    x: event.clientX,
+    y: event.clientY
+  })
+}
+
+function onDragOver(event: DragEvent) {
+  if (!canEdit.value || mode.value !== 'edit') return
+  if (event.dataTransfer?.types.includes('Files')) {
+    event.preventDefault()
+  }
+}
+
+onMounted(() => {
+  window.addEventListener('paste', onPaste)
+  window.addEventListener('drop', onDrop)
+  window.addEventListener('dragover', onDragOver)
+})
+
+onBeforeUnmount(() => {
+  window.removeEventListener('paste', onPaste)
+  window.removeEventListener('drop', onDrop)
+  window.removeEventListener('dragover', onDragOver)
+})
 </script>
 
 <template>
-  <main v-if="space" class="page page-space">
+  <main v-if="space" class="page page-space" :style="spaceThemeStyle">
+    <input
+      ref="mediaInput"
+      class="sr-only-input"
+      type="file"
+      :accept="selectedMediaKind === 'image' ? 'image/*' : selectedMediaKind === 'audio' ? 'audio/*' : selectedMediaKind === 'video' ? 'video/*' : 'image/*,audio/*,video/*'"
+      @change="onMediaFileChange"
+    />
     <CanvasSurface
       ref="surface"
       :nodes="space.nodes"
       :fragments="space.fragments"
       :triggers="space.triggers"
       :mode="mode"
+      :space-handle="space.handle"
       :rasterization="rasterizationEnabled"
       @change="setNodes"
       @select="selectNode"
     />
-
     <aside class="space-left-stack">
       <div class="space-meta">
-        <NuxtLink class="space-handle" :to="`/space/${space.handle}`">@{{ space.handle }}</NuxtLink>
-        <span class="space-status">{{ space.status }}</span>
-        <span class="space-followers">{{ space.followers }} followers</span>
-        <button v-if="auth.user?.handle !== space.handle" type="button" @click="toggleFollowSpace">{{ followPending ? '...' : space.followedByMe ? 'following' : 'follow' }}</button>
-        <NuxtLink v-if="canEdit" class="meta-link" to="/settings">settings</NuxtLink>
+        <div class="space-identity">
+          <div class="space-title-row">
+            <NuxtLink class="space-handle" :to="`/space/${space.handle}`">@{{ space.handle }}</NuxtLink>
+            <strong v-if="space.name" class="space-name">{{ space.name }}</strong>
+          </div>
+          <div v-if="space.links?.length" class="space-links">
+            <a
+              v-for="link in space.links"
+              :key="typeof link === 'string' ? link : `${link.label}-${link.url}`"
+              :href="linkHref(link)"
+              target="_blank"
+              rel="noreferrer"
+            >
+              {{ linkLabel(link) }}
+            </a>
+          </div>
+        </div>
+        <div class="space-meta-actions">
+          <span v-if="space.status" class="space-status">{{ space.status }}</span>
+          <span class="space-followers">{{ space.followers }} followers</span>
+          <button v-if="auth.user?.handle !== space.handle" type="button" @click="toggleFollowSpace">{{ followPending ? '...' : space.followedByMe ? 'following' : 'follow' }}</button>
+          <NuxtLink v-if="canEdit" class="meta-link" to="/settings">settings</NuxtLink>
+        </div>
       </div>
 
       <div class="rail rail-left">
@@ -670,6 +1148,48 @@ async function save() {
         </label>
 
         <textarea v-if="selected.kind !== 'line'" :value="selected.text" aria-label="Text" rows="3" @input="patchSelected({ text: ($event.target as HTMLTextAreaElement).value })" />
+        <PortalTargetPicker
+          v-if="selected.kind === 'portal'"
+          :current-handle="space.handle"
+          :current-fragments="space.fragments"
+          :model-space-handle="selected.portalTargetSpaceHandle"
+          :model-fragment-id="selected.portalTargetFragmentId"
+          @update:model-space-handle="patchPortalTargetSpaceHandle"
+          @update:model-fragment-id="patchPortalTargetFragmentId"
+        />
+      </section>
+
+      <section v-if="selectedMediaKind" class="dock-section media-fields">
+        <span class="dock-section-label">media</span>
+        <div class="dock-actions media-mode-actions">
+          <button
+            type="button"
+            :class="{ active: selectedMedia?.mode !== 'embed' }"
+            @click="openMediaPicker"
+          >
+            upload
+          </button>
+          <button
+            type="button"
+            :class="{ active: selectedMedia?.mode === 'embed' }"
+            @click="patchSelected({ media: undefined })"
+          >
+            embed link
+          </button>
+        </div>
+        <label>
+          <span>embed url</span>
+          <input v-model="mediaDraftUrl" placeholder="https://..." @keydown.enter.prevent="applyEmbedLink" />
+        </label>
+        <div class="dock-actions">
+          <button type="button" @click="applyEmbedLink">{{ mediaBusy ? '...' : 'apply link' }}</button>
+          <button type="button" @click="openMediaPicker">{{ mediaBusy ? '...' : 'upload file' }}</button>
+        </div>
+        <span class="media-hint">Hosted uploads are capped at 500 KB each and 10 MB per space. Larger files should use embeds.</span>
+        <span v-if="selectedMedia?.mode === 'upload'" class="media-hint">
+          hosted {{ Math.round((selectedMedia.bytes ?? 0) / 1024) }} KB
+        </span>
+        <span v-if="mediaError" class="media-error">{{ mediaError }}</span>
       </section>
 
         <section v-if="selected.kind === 'profile'" class="dock-section profile-fields">

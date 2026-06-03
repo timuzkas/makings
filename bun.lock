@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "atelier-canvas-network",
+      "name": "makings-canvas-network",
       "dependencies": {
         "nuxt": "^3.12.4",
         "vue": "^3.5.13",
