@@ -43,6 +43,7 @@ export interface CanvasNode {
   showDescription?: boolean
   showTags?: boolean
   arrowEnd?: boolean
+  arrowHeadStyle?: 'filled' | 'lines'
   lineStartX?: number
   lineStartY?: number
   lineEndX?: number

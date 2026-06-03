@@ -713,7 +713,7 @@ button {
 }
 
 .is-line {
-  border-color: transparent;
+  border: 0 !important;
   background: transparent;
   overflow: visible;
   padding: 0 !important;
@@ -729,7 +729,7 @@ button {
   pointer-events: none;
 }
 
-.node-line path {
+.node-line > path {
   stroke: currentColor;
   fill: none;
   stroke-width: max(1px, var(--node-line-width, 4px));
@@ -905,8 +905,32 @@ button {
     rgba(0, 0, 0, 0.22);
 }
 
+.is-text.effect-shadow {
+  box-shadow: none;
+}
+
+.is-text.effect-shadow .node-text {
+  text-shadow:
+    calc(var(--effect-shadow-x) * var(--effect-strength))
+    calc(var(--effect-shadow-y) * var(--effect-strength))
+    calc(12px * var(--effect-strength))
+    rgba(0, 0, 0, 0.22);
+}
+
 .effect-hard-shadow {
   box-shadow:
+    calc(var(--effect-shadow-x) * var(--effect-strength))
+    calc(var(--effect-shadow-y) * var(--effect-strength))
+    0
+    var(--ink);
+}
+
+.is-text.effect-hard-shadow {
+  box-shadow: none;
+}
+
+.is-text.effect-hard-shadow .node-text {
+  text-shadow:
     calc(var(--effect-shadow-x) * var(--effect-strength))
     calc(var(--effect-shadow-y) * var(--effect-strength))
     0
@@ -1683,17 +1707,18 @@ button:disabled {
 }
 
 .trigger-line button {
-  display: grid;
+  display: block;
   width: 100%;
   border-color: var(--line-dark);
+  text-align: left;
 }
 
 .trigger-line button:first-child {
-  justify-content: start;
-  place-items: center start;
+  padding: 8px 10px;
 }
 
 .trigger-line button:last-child {
+  display: grid;
   justify-content: center;
   place-items: center;
   padding: 0;

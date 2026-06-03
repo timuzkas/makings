@@ -664,6 +664,10 @@ async function save() {
           <input :checked="selected.arrowEnd !== false" type="checkbox" @change="patchSelected({ arrowEnd: ($event.target as HTMLInputElement).checked })" />
           arrow end
         </label>
+        <label v-if="selected.kind === 'line' && selected.arrowEnd !== false" class="toggle-row">
+          <input :checked="selected.arrowHeadStyle !== 'lines'" type="checkbox" @change="patchSelected({ arrowHeadStyle: ($event.target as HTMLInputElement).checked ? 'filled' : 'lines' })" />
+          filled head
+        </label>
 
         <textarea v-if="selected.kind !== 'line'" :value="selected.text" aria-label="Text" rows="3" @input="patchSelected({ text: ($event.target as HTMLTextAreaElement).value })" />
       </section>

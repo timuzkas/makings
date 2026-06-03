@@ -192,7 +192,7 @@ function nodeStyle(node: CanvasNode) {
   const nodeTop = node.y * sceneScale
   const nodeWidth = node.w * sceneScale
   const nodeHeight = node.h * sceneScale
-  const nodeBorderWidth = (node.borderWidth ?? 1) * sceneScale
+  const nodeBorderWidth = node.kind === 'line' ? 0 : (node.borderWidth ?? 1) * sceneScale
   const nodeRadius = (node.radius ?? 0) * sceneScale
   const nodePadding = (node.padding ?? 0) * sceneScale
   const nodeFontSize = (node.fontSize ?? (node.kind === 'text' ? 52 : 16)) * sceneScale
@@ -380,6 +380,21 @@ function focusFragment(fragmentId: string) {
   viewport.y = -(fragment.bounds.y + fragment.bounds.h / 2) * viewport.zoom + stage.clientHeight / 2
 }
 
+function shiftColor(hex: string, delta: number) {
+  if (!hex || !hex.startsWith('#')) return hex
+
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+
+  const amount = Math.round(delta)
+  const nr = Math.max(0, Math.min(255, r + amount))
+  const ng = Math.max(0, Math.min(255, g + amount))
+  const nb = Math.max(0, Math.min(255, b + amount))
+
+  return `#${nr.toString(16).padStart(2, '0')}${ng.toString(16).padStart(2, '0')}${nb.toString(16).padStart(2, '0')}`
+}
+
 function parseActionValue(action: CanvasAction, target: CanvasNode) {
   if (!action.property) return action.value
   const fallback = action.value ?? ''
@@ -411,6 +426,16 @@ function parseActionValue(action: CanvasAction, target: CanvasNode) {
     const absolute = raw.startsWith('=') ? raw.slice(1) : raw
     const parsed = Number(absolute)
     return Number.isFinite(parsed) ? clampNumericActionValue(action.property, parsed) : target[action.property as keyof CanvasNode]
+  }
+
+  if (action.property === 'color' || action.property === 'textColor') {
+    const raw = String(fallback).trim()
+    const relative = raw.match(/^([+-])(\d+)$/)
+    if (relative) {
+      const current = String(target[action.property as keyof CanvasNode] ?? (action.property === 'color' ? '#ffffff' : '#101010'))
+      const amount = Number(relative[2]) * (relative[1] === '-' ? -1 : 1)
+      return shiftColor(current, amount)
+    }
   }
 
   if (booleanActionProperties.has(action.property)) {
@@ -684,6 +709,7 @@ function addNode(kind: CanvasNode['kind']) {
     z,
     text: kind,
     arrowEnd: kind === 'line',
+    arrowHeadStyle: kind === 'line' ? 'filled' : undefined,
     lineStartX: kind === 'line' ? 3 : undefined,
     lineStartY: kind === 'line' ? 50 : undefined,
     lineEndX: kind === 'line' ? 97 : undefined,
@@ -866,7 +892,20 @@ onBeforeUnmount(() => {
                 orient="auto"
                 markerUnits="strokeWidth"
               >
-                <path d="M0,0 L8,4 L0,8 Z" fill="currentColor" />
+                <path
+                  v-if="node.arrowHeadStyle === 'lines'"
+                  d="M1,1 L7,4 L1,7"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+                <path
+                  v-else
+                  d="M0,0 L8,4 L0,8 Z"
+                  fill="currentColor"
+                />
               </marker>
             </defs>
             <path

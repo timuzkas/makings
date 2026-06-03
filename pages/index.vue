@@ -92,7 +92,7 @@ function previewNodeStyle(node: CanvasNode, fragment: FeedFragment) {
     background: node.color,
     color: node.textColor ?? (node.kind === 'video' || node.kind === 'audio' || node.kind === 'portal' ? '#ffffff' : '#101010'),
     borderColor: node.borderColor ?? '#101010',
-    borderWidth: `${node.borderWidth ?? 1}px`,
+    borderWidth: node.kind === 'line' ? 0 : `${node.borderWidth ?? 1}px`,
     borderRadius: `${node.radius ?? 0}px`,
     padding: `${node.padding ?? 0}px`,
     placeItems: node.layout ?? 'center',
@@ -216,7 +216,20 @@ function linePath(node: CanvasNode) {
                     orient="auto"
                     markerUnits="strokeWidth"
                   >
-                    <path d="M0,0 L8,4 L0,8 Z" fill="currentColor" />
+                    <path
+                      v-if="node.arrowHeadStyle === 'lines'"
+                      d="M1,1 L7,4 L1,7"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    />
+                    <path
+                      v-else
+                      d="M0,0 L8,4 L0,8 Z"
+                      fill="currentColor"
+                    />
                   </marker>
                 </defs>
                 <path
