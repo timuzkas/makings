@@ -358,6 +358,7 @@ export function listFeed(token?: string) {
         ...fragment,
         nodes: nodesInFragment(space.nodes, fragment),
         googleFonts: space.googleFonts ?? [],
+        theme: space.theme,
         likes: social.likes.filter((like) => like.fragmentKey === key).length,
         likedByMe: viewer ? social.likes.some((like) => like.from === viewer.handle && like.fragmentKey === key) : false,
         comments: comments.slice(-3),

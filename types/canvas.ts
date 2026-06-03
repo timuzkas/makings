@@ -114,6 +114,7 @@ export interface CanvasFragment {
 export interface FeedFragment extends CanvasFragment {
   nodes: CanvasNode[]
   googleFonts?: string[]
+  theme?: SpaceRecord['theme']
   likes?: number
   likedByMe?: boolean
   comments?: PostComment[]

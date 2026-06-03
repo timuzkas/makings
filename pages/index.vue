@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { CanvasNode, FeedFragment } from '../types/canvas'
+import { renderRichText } from '../utils/richText'
 
 const { data: fragments } = await useFetch<FeedFragment[]>('/api/feed', {
   default: () => []
@@ -45,6 +46,7 @@ function feedSnippetStyle(fragment: FeedFragment, index: number) {
 
   return {
     gridColumn: wide ? 'span 2' : undefined,
+    '--snippet-page': fragment.theme?.page ?? 'var(--page)',
     '--snippet-preview-height': `${height}px`
   }
 }
@@ -110,7 +112,8 @@ function previewNodeStyle(node: CanvasNode, fragment: FeedFragment) {
   return {
     width: `${node.w}px`,
     height: `${node.h}px`,
-    transform: `translate(${node.x - fragment.bounds.x}px, ${node.y - fragment.bounds.y}px) ${rotate} ${nodeScale} ${tilt}`,
+    transform: `translate(${node.x - fragment.bounds.x + node.w / 2}px, ${node.y - fragment.bounds.y + node.h / 2}px) ${rotate} ${nodeScale} ${tilt}`,
+    transformOrigin: 'center center',
     zIndex: node.z,
     opacity: node.opacity ?? 1,
     background: node.kind === 'line' ? 'transparent' : node.color,
@@ -171,6 +174,32 @@ function linePoint(node: CanvasNode, point: 'start' | 'bend' | 'end', axis: 'x' 
 
 function lineHasBend(node: CanvasNode) {
   return Number.isFinite(node.lineBendX) && Number.isFinite(node.lineBendY)
+}
+
+function lineEffectStyle(node: CanvasNode) {
+  if (node.effect === 'shadow') {
+    return {
+      filter: 'drop-shadow(calc(var(--effect-shadow-x) * var(--effect-strength)) calc(var(--effect-shadow-y) * var(--effect-strength)) calc(12px * var(--effect-strength)) rgba(0, 0, 0, 0.22))'
+    }
+  }
+
+  if (node.effect === 'hard-shadow') {
+    return {
+      filter: 'drop-shadow(calc(var(--effect-shadow-x) * var(--effect-strength)) calc(var(--effect-shadow-y) * var(--effect-strength)) 0 var(--ink))'
+    }
+  }
+
+  return {}
+}
+
+function lineOutlineStyle(node: CanvasNode) {
+  if (node.effect !== 'outline') return {}
+
+  return {
+    stroke: 'var(--page)',
+    strokeWidth: 'calc(var(--node-line-width) + (var(--effect-outline) * 2))',
+    pointerEvents: 'none'
+  }
 }
 
 function linePath(node: CanvasNode) {
@@ -258,11 +287,20 @@ function linePath(node: CanvasNode) {
                   </marker>
                 </defs>
                 <path
+                  v-if="node.effect === 'outline'"
+                  class="line-outline-path"
                   :d="linePath(node)"
                   :marker-end="node.arrowEnd !== false ? `url(#snippet-arrow-${fragment.id}-${node.id})` : undefined"
+                  :style="lineOutlineStyle(node)"
+                />
+                <path
+                  class="line-base-path"
+                  :d="linePath(node)"
+                  :marker-end="node.arrowEnd !== false ? `url(#snippet-arrow-${fragment.id}-${node.id})` : undefined"
+                  :style="lineEffectStyle(node)"
                 />
               </svg>
-              <span v-else-if="node.kind === 'text'" class="node-text">{{ node.text }}</span>
+              <span v-else-if="node.kind === 'text'" class="node-text" v-html="renderRichText(node.text)"></span>
               <span v-else-if="node.kind === 'portal'" class="node-portal">{{ node.text }}</span>
               <NodeMediaContent v-else-if="node.media" :node="node" context="feed" />
               <span v-else class="node-label">{{ node.text }}</span>

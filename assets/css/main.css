@@ -273,7 +273,8 @@ button {
   min-height: var(--snippet-preview-height, 180px);
   overflow: hidden;
   border: 1px dashed color-mix(in srgb, var(--line-dark) 55%, transparent);
-  background:
+  background-color: var(--snippet-page, var(--page));
+  background-image:
     linear-gradient(rgba(16, 16, 16, 0.05) 1px, transparent 1px),
     linear-gradient(90deg, rgba(16, 16, 16, 0.05) 1px, transparent 1px);
   background-size: 22px 22px;
@@ -321,6 +322,10 @@ button {
   stroke-linecap: round;
   stroke-linejoin: round;
   vector-effect: non-scaling-stroke;
+}
+
+.snippet-line > .line-outline-path {
+  pointer-events: none;
 }
 
 .snippet-image {
@@ -741,6 +746,10 @@ button {
   cursor: crosshair;
 }
 
+.node-line > .line-outline-path {
+  pointer-events: none;
+}
+
 .line-point {
   position: absolute;
   z-index: 5;
@@ -778,6 +787,8 @@ button {
   font-size: var(--node-size);
   font-weight: var(--node-weight);
   line-height: 0.95;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .node-media {
@@ -1013,6 +1024,20 @@ button {
 .effect-outline {
   outline: calc(var(--effect-outline) * var(--effect-strength)) double var(--node-color);
   outline-offset: 7px;
+}
+
+.is-line.effect-shadow,
+.is-line.effect-hard-shadow,
+.is-line.effect-outline {
+  box-shadow: none;
+  outline: none;
+}
+
+.snippet-node.is-line.effect-shadow,
+.snippet-node.is-line.effect-hard-shadow,
+.snippet-node.is-line.effect-outline {
+  box-shadow: none;
+  outline: none;
 }
 
 .anim-pulse {

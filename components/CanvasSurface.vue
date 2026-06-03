@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { CanvasAction, CanvasFragment, CanvasNode, CanvasTrigger } from '../types/canvas'
 import { mediaKindFromNodeKind, normalizeMediaRef } from '../utils/media'
+import { renderRichText } from '../utils/richText'
 
 const props = defineProps<{
   nodes: CanvasNode[]
@@ -210,8 +211,8 @@ function nodeStyle(node: CanvasNode) {
     height: `${nodeHeight}px`,
     left: rasterized ? undefined : `${nodeLeft}px`,
     top: rasterized ? undefined : `${nodeTop}px`,
-    transform: rasterized ? `translate(${node.x}px, ${node.y}px) ${rotate} ${scale} ${tilt}` : `${rotate} ${scale} ${tilt}`,
-    transformOrigin: rasterized ? undefined : '0 0',
+    transform: rasterized ? `translate(${node.x + nodeWidth / 2}px, ${node.y + nodeHeight / 2}px) ${rotate} ${scale} ${tilt}` : `${rotate} ${scale} ${tilt}`,
+    transformOrigin: 'center center',
     zIndex: node.z,
     opacity: node.opacity ?? 1,
     borderColor: node.borderColor ?? '#202020',
@@ -256,6 +257,32 @@ function linePoint(node: CanvasNode, point: 'start' | 'bend' | 'end', axis: 'x' 
 
 function lineHasBend(node: CanvasNode) {
   return Number.isFinite(node.lineBendX) && Number.isFinite(node.lineBendY)
+}
+
+function lineEffectStyle(node: CanvasNode) {
+  if (node.effect === 'shadow') {
+    return {
+      filter: 'drop-shadow(calc(var(--effect-shadow-x) * var(--effect-strength)) calc(var(--effect-shadow-y) * var(--effect-strength)) calc(12px * var(--effect-strength)) rgba(0, 0, 0, 0.22))'
+    }
+  }
+
+  if (node.effect === 'hard-shadow') {
+    return {
+      filter: 'drop-shadow(calc(var(--effect-shadow-x) * var(--effect-strength)) calc(var(--effect-shadow-y) * var(--effect-strength)) 0 var(--ink))'
+    }
+  }
+
+  return {}
+}
+
+function lineOutlineStyle(node: CanvasNode) {
+  if (node.effect !== 'outline') return {}
+
+  return {
+    stroke: 'var(--page)',
+    strokeWidth: 'calc(var(--node-line-width) + (var(--effect-outline) * 2))',
+    pointerEvents: 'none'
+  }
 }
 
 function linePath(node: CanvasNode) {
@@ -980,7 +1007,6 @@ onBeforeUnmount(() => {
             <span v-for="tag in node.tags" :key="tag">{{ tag }}</span>
           </div>
         </template>
-        <span v-else-if="node.kind === 'text'" class="node-text">{{ node.text }}</span>
         <template v-else-if="node.kind === 'line'">
           <svg class="node-line" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
             <defs>
@@ -1010,8 +1036,17 @@ onBeforeUnmount(() => {
               </marker>
             </defs>
             <path
+              v-if="node.effect === 'outline'"
+              class="line-outline-path"
               :d="linePath(node)"
               :marker-end="node.arrowEnd !== false ? `url(#arrow-${node.id})` : undefined"
+              :style="lineOutlineStyle(node)"
+            />
+            <path
+              class="line-base-path"
+              :d="linePath(node)"
+              :marker-end="node.arrowEnd !== false ? `url(#arrow-${node.id})` : undefined"
+              :style="lineEffectStyle(node)"
               @pointerdown="onLinePathPointerDown($event, node)"
             />
           </svg>
@@ -1036,6 +1071,7 @@ onBeforeUnmount(() => {
             />
           </template>
         </template>
+        <span v-else-if="node.kind === 'text'" class="node-text" v-html="renderRichText(node.text)"></span>
         <span v-else-if="node.kind === 'portal'" class="node-portal">{{ node.text }}</span>
         <NodeMediaContent
           v-else-if="normalizeMediaRef(node.media, mediaKindFromNodeKind(node.kind) ?? undefined)"

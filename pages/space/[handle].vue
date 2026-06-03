@@ -1140,6 +1140,10 @@ onBeforeUnmount(() => {
           <input :checked="selected.interpolate !== false" type="checkbox" @change="patchSelected({ interpolate: ($event.target as HTMLInputElement).checked })" />
           interpolate
         </label>
+        <label class="toggle-row">
+          <input :checked="selected.hidden !== true" type="checkbox" @change="patchSelected({ hidden: !($event.target as HTMLInputElement).checked })" />
+          visible
+        </label>
         <label v-if="selected.kind === 'line'" class="toggle-row">
           <input :checked="selected.arrowEnd !== false" type="checkbox" @change="patchSelected({ arrowEnd: ($event.target as HTMLInputElement).checked })" />
           arrow end
