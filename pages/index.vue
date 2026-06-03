@@ -46,6 +46,10 @@ function feedSnippetStyle(fragment: FeedFragment, index: number) {
 
   return {
     gridColumn: wide ? 'span 2' : undefined,
+    '--page': fragment.theme?.page ?? '#ffffff',
+    '--ink': fragment.theme?.ink ?? '#101010',
+    '--line': fragment.theme?.line ?? '#dddddd',
+    '--line-dark': fragment.theme?.ink ?? '#101010',
     '--snippet-page': fragment.theme?.page ?? 'var(--page)',
     '--snippet-preview-height': `${height}px`
   }
@@ -112,7 +116,7 @@ function previewNodeStyle(node: CanvasNode, fragment: FeedFragment) {
   return {
     width: `${node.w}px`,
     height: `${node.h}px`,
-    transform: `translate(${node.x - fragment.bounds.x + node.w / 2}px, ${node.y - fragment.bounds.y + node.h / 2}px) ${rotate} ${nodeScale} ${tilt}`,
+    transform: `translate(${node.x - fragment.bounds.x}px, ${node.y - fragment.bounds.y}px) ${rotate} ${nodeScale} ${tilt}`,
     transformOrigin: 'center center',
     zIndex: node.z,
     opacity: node.opacity ?? 1,

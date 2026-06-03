@@ -211,7 +211,7 @@ function nodeStyle(node: CanvasNode) {
     height: `${nodeHeight}px`,
     left: rasterized ? undefined : `${nodeLeft}px`,
     top: rasterized ? undefined : `${nodeTop}px`,
-    transform: rasterized ? `translate(${node.x + nodeWidth / 2}px, ${node.y + nodeHeight / 2}px) ${rotate} ${scale} ${tilt}` : `${rotate} ${scale} ${tilt}`,
+    transform: rasterized ? `translate(${node.x}px, ${node.y}px) ${rotate} ${scale} ${tilt}` : `${rotate} ${scale} ${tilt}`,
     transformOrigin: 'center center',
     zIndex: node.z,
     opacity: node.opacity ?? 1,
