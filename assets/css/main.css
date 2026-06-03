@@ -9,6 +9,9 @@
   --red: #ff6f61;
   --yellow: #e8ff5c;
   --chrome: #ffffff;
+  --panel-bg: var(--page);
+  --panel-fg: var(--ink);
+  --panel-border: var(--line);
   --app-grid-size: 40px;
   --app-radius: 8px;
   --grid-opacity: 1;
@@ -44,10 +47,35 @@ input,
 select,
 textarea {
   font: inherit;
+  accent-color: var(--ink);
 }
 
 button {
   cursor: pointer;
+}
+
+/* Custom Scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--muted) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--muted);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--ink);
 }
 
 .top-island {
@@ -1450,7 +1478,7 @@ button {
 .color-picker-swatch {
   width: 18px;
   height: 18px;
-  border: 1px solid var(--panel-border);
+  border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .color-picker-label,
@@ -1522,7 +1550,7 @@ button {
 .color-swatch {
   aspect-ratio: 1;
   padding: 0;
-  border: 1px solid var(--panel-border);
+  border: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
 }
 
 .color-swatch.active {
