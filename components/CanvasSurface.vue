@@ -1039,7 +1039,6 @@ onBeforeUnmount(() => {
               v-if="node.effect === 'outline'"
               class="line-outline-path"
               :d="linePath(node)"
-              :marker-end="node.arrowEnd !== false ? `url(#arrow-${node.id})` : undefined"
               :style="lineOutlineStyle(node)"
             />
             <path

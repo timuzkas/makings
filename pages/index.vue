@@ -48,6 +48,7 @@ function feedSnippetStyle(fragment: FeedFragment, index: number) {
     gridColumn: wide ? 'span 2' : undefined,
     '--page': fragment.theme?.page ?? '#ffffff',
     '--ink': fragment.theme?.ink ?? '#101010',
+    '--muted': fragment.theme?.muted ?? 'color-mix(in srgb, var(--ink) 62%, var(--page) 38%)',
     '--line': fragment.theme?.line ?? '#dddddd',
     '--line-dark': fragment.theme?.ink ?? '#101010',
     '--snippet-page': fragment.theme?.page ?? 'var(--page)',
@@ -294,7 +295,6 @@ function linePath(node: CanvasNode) {
                   v-if="node.effect === 'outline'"
                   class="line-outline-path"
                   :d="linePath(node)"
-                  :marker-end="node.arrowEnd !== false ? `url(#snippet-arrow-${fragment.id}-${node.id})` : undefined"
                   :style="lineOutlineStyle(node)"
                 />
                 <path
