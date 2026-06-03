@@ -9,6 +9,8 @@ export type ActionType =
   | 'toggle'
   | 'show'
   | 'hide'
+  | 'toggle-audio'
+  | 'toggle-video'
   | 'focus'
   | 'message'
   | 'tint'

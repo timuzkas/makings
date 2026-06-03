@@ -462,6 +462,8 @@ function runAction(action: CanvasAction) {
     if (action.type === 'toggle' && target) target.hidden = !target.hidden
     if (action.type === 'show' && target) target.hidden = false
     if (action.type === 'hide' && target) target.hidden = true
+    if (action.type === 'toggle-audio' && target?.kind === 'audio') toggleMediaPlayback(target)
+    if (action.type === 'toggle-video' && target?.kind === 'video') toggleMediaPlayback(target)
     if (action.type === 'tint' && target && action.color) target.color = action.color
     if (action.type === 'animate' && target) target.animation = action.animation ?? 'pulse'
     if (action.type === 'set-property' && target && action.property) {
@@ -676,6 +678,29 @@ function onNodeClick(node: CanvasNode) {
       }
     }
     runTriggers('click', node.id)
+  }
+}
+
+function findNodeElement(nodeId: string) {
+  const stage = stageRef.value
+  if (!stage) return null
+
+  return Array.from(stage.querySelectorAll<HTMLElement>('[data-node]')).find((element) => element.dataset.nodeId === nodeId) ?? null
+}
+
+function toggleMediaPlayback(target: CanvasNode) {
+  if (!['audio', 'video'].includes(target.kind)) return
+
+  const nodeElement = findNodeElement(target.id)
+  if (!nodeElement) return
+
+  const mediaElement = nodeElement.querySelector('audio, video') as HTMLMediaElement | null
+  if (!mediaElement) return
+
+  if (mediaElement.paused) {
+    void mediaElement.play().catch(() => undefined)
+  } else {
+    mediaElement.pause()
   }
 }
 
@@ -942,6 +967,7 @@ onBeforeUnmount(() => {
         ]"
         :style="nodeStyle(node)"
         data-node
+        :data-node-id="node.id"
         @pointerdown.stop="onNodePointerDown($event, node)"
         @click.stop="onNodeClick(node)"
         @mouseenter="mode === 'view' && runTriggers('hover', node.id)"

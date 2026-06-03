@@ -164,6 +164,8 @@ const triggerActionOptions = [
   { label: 'toggle visibility', value: 'toggle' },
   { label: 'show object', value: 'show' },
   { label: 'hide object', value: 'hide' },
+  { label: 'toggle audio', value: 'toggle-audio' },
+  { label: 'toggle video', value: 'toggle-video' },
   { label: 'move camera', value: 'focus' },
   { label: 'send message', value: 'message' },
   { label: 'change color', value: 'tint' },
@@ -533,7 +535,7 @@ function startNumberScrub(event: PointerEvent, key: NumberField, value: unknown)
 }
 
 function triggerNeedsTarget(action: ActionType) {
-  return ['toggle', 'show', 'hide', 'tint', 'animate', 'set-property'].includes(action)
+  return ['toggle', 'show', 'hide', 'toggle-audio', 'toggle-video', 'tint', 'animate', 'set-property'].includes(action)
 }
 
 function resetTriggerDraft() {
