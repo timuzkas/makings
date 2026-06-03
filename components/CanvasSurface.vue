@@ -212,7 +212,7 @@ function nodeStyle(node: CanvasNode) {
     left: rasterized ? undefined : `${nodeLeft}px`,
     top: rasterized ? undefined : `${nodeTop}px`,
     transform: rasterized ? `translate(${node.x}px, ${node.y}px) ${rotate} ${scale} ${tilt}` : `${rotate} ${scale} ${tilt}`,
-    transformOrigin: 'center center',
+    transformOrigin: node.kind === 'line' ? lineTransformOrigin(node) : 'center center',
     zIndex: node.z,
     opacity: node.opacity ?? 1,
     borderColor: node.borderColor ?? '#202020',
@@ -257,6 +257,24 @@ function linePoint(node: CanvasNode, point: 'start' | 'bend' | 'end', axis: 'x' 
 
 function lineHasBend(node: CanvasNode) {
   return Number.isFinite(node.lineBendX) && Number.isFinite(node.lineBendY)
+}
+
+function lineTransformOrigin(node: CanvasNode) {
+  const points = [
+    { x: linePoint(node, 'start', 'x'), y: linePoint(node, 'start', 'y') },
+    { x: linePoint(node, 'end', 'x'), y: linePoint(node, 'end', 'y') }
+  ]
+
+  if (lineHasBend(node)) {
+    points.push({ x: linePoint(node, 'bend', 'x'), y: linePoint(node, 'bend', 'y') })
+  }
+
+  const xs = points.map((point) => point.x)
+  const ys = points.map((point) => point.y)
+  const centerX = (Math.min(...xs) + Math.max(...xs)) / 2
+  const centerY = (Math.min(...ys) + Math.max(...ys)) / 2
+
+  return `${centerX}% ${centerY}%`
 }
 
 function lineEffectStyle(node: CanvasNode) {
