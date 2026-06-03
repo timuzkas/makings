@@ -13,9 +13,9 @@ FROM oven/bun:1.3.5 AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOST=0.0.0.0
-ENV PORT=3000
+ENV PORT=3013
 COPY --from=build /app/.output ./.output
 RUN mkdir -p /app/.data
 VOLUME ["/app/.data"]
-EXPOSE 3000
+EXPOSE 3013
 CMD ["bun", "run", ".output/server/index.mjs"]
