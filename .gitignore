@@ -1,0 +1,9 @@
+node_modules
+.nuxt
+.output
+.git
+.data
+npm-debug.log
+yarn-error.log
+Dockerfile
+.dockerignore
