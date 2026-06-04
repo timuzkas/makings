@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { CanvasAction, CanvasFragment, CanvasNode, CanvasTrigger } from '../types/canvas'
+import type { AuthUser, CanvasAction, CanvasFragment, CanvasNode, CanvasStateVariable, CanvasTrigger, GuestbookEntry, StateValue } from '../types/canvas'
 import { mediaKindFromNodeKind, normalizeMediaRef } from '../utils/media'
 import { renderRichText } from '../utils/richText'
 
@@ -9,6 +9,8 @@ const props = defineProps<{
   triggers: CanvasTrigger[]
   mode: 'view' | 'edit'
   spaceHandle?: string
+  stateVariables?: CanvasStateVariable[]
+  authUser?: AuthUser | null
   activeId?: string
   rasterization?: boolean
 }>()
@@ -20,12 +22,21 @@ const emit = defineEmits<{
 
 const stageRef = ref<HTMLElement | null>(null)
 const selectedId = ref(props.activeId ?? '')
+const selectedIds = ref<string[]>(props.activeId ? [props.activeId] : [])
 const draggingId = ref('')
 const resizingId = ref('')
 const viewport = reactive({ x: 0, y: 0, zoom: 0.9 })
 const localNodes = ref<CanvasNode[]>([])
 const clipboardNode = ref<CanvasNode | null>(null)
 const history = ref<CanvasNode[][]>([])
+const visitorState = reactive<Record<string, StateValue>>({})
+const globalState = reactive<Record<string, StateValue>>({})
+const guestbookEntries = reactive<Record<string, GuestbookEntry[]>>({})
+const guestbookDrafts = reactive<Record<string, string>>({})
+const guestbookBusy = ref('')
+const guestbookErrors = reactive<Record<string, string>>({})
+const soundEnabled = ref(false)
+const embeddedPlaybackState = new Set<string>()
 const numericActionProperties = new Set([
   'x',
   'y',
@@ -58,6 +69,10 @@ const numericActionProperties = new Set([
   'perspective'
 ])
 const booleanActionProperties = new Set(['hidden', 'arrowEnd', 'interpolate'])
+const visualPreviewActions = new Set(['toggle', 'show', 'hide', 'tint', 'animate', 'set-property', 'set-state', 'toggle-state', 'increment-state'])
+const localStorageKey = computed(() => `makings:${props.spaceHandle ?? 'space'}:visitor-state`)
+const guestbookNodes = computed(() => localNodes.value.filter((node) => node.kind === 'guestbook'))
+const hasSoundZones = computed(() => props.mode === 'view' && localNodes.value.some((node) => node.kind === 'audio' && node.soundZoneEnabled))
 
 function cloneNodes(nodes: CanvasNode[]) {
   return JSON.parse(JSON.stringify(toRaw(nodes))) as CanvasNode[]
@@ -103,6 +118,7 @@ function pasteSelected() {
     ...JSON.parse(JSON.stringify(toRaw(clipboardNode.value))),
     id: `${clipboardNode.value.kind}-${crypto.randomUUID().slice(0, 8)}`,
     locked: false,
+    groupId: undefined,
     x: clipboardNode.value.x + 32,
     y: clipboardNode.value.y + 32,
     z
@@ -120,7 +136,8 @@ function cutSelected() {
 
   copySelected()
   pushHistory()
-  localNodes.value = localNodes.value.filter((item) => item.id !== node.id)
+  const ids = new Set(activeSelectionIds())
+  localNodes.value = localNodes.value.filter((item) => !ids.has(item.id))
   select(null)
   sync()
 }
@@ -136,6 +153,18 @@ function onKeyDown(event: KeyboardEvent) {
   if (props.mode !== 'edit' || isTypingTarget(event.target)) return
 
   const key = event.key.toLowerCase()
+
+  if ((event.ctrlKey || event.metaKey) && key === 'g') {
+    event.preventDefault()
+    groupSelected()
+    return
+  }
+
+  if (event.shiftKey && key === 'g') {
+    event.preventDefault()
+    ungroupSelected()
+    return
+  }
 
   if (key === 'delete' || key === 'backspace') {
     event.preventDefault()
@@ -173,6 +202,28 @@ watch(
   { immediate: true, deep: true }
 )
 
+watch(
+  () => props.stateVariables ?? [],
+  () => {
+    initializeState()
+  },
+  { immediate: true, deep: true }
+)
+
+watch(guestbookNodes, (nodes) => {
+  if (props.mode !== 'view') return
+  for (const node of nodes) {
+    void loadGuestbook(node.id)
+  }
+}, { immediate: true })
+
+watch(
+  () => props.mode,
+  (nextMode) => {
+    if (nextMode !== 'view') pauseSoundZones()
+  }
+)
+
 const visibleNodes = computed(() => localNodes.value.filter((node) => !node.hidden))
 const rasterizedWorld = computed(() => props.rasterization !== false)
 
@@ -180,9 +231,95 @@ function sync() {
   emit('change', cloneNodes(localNodes.value))
 }
 
+function stateVariable(key?: string) {
+  if (!key) return undefined
+  return (props.stateVariables ?? []).find((variable) => variable.key === key)
+}
+
+function initializeState() {
+  const storedVisitorState = import.meta.client
+    ? JSON.parse(window.localStorage.getItem(localStorageKey.value) || '{}') as Record<string, StateValue>
+    : {}
+
+  for (const variable of props.stateVariables ?? []) {
+    if (variable.scope === 'visitor') {
+      visitorState[variable.key] = storedVisitorState[variable.key] ?? variable.initialValue
+    } else {
+      globalState[variable.key] = variable.initialValue
+    }
+  }
+
+  if (props.mode === 'view' && props.spaceHandle) {
+    void loadGlobalState()
+  }
+}
+
+function saveVisitorState() {
+  if (!import.meta.client) return
+  const values = Object.fromEntries(
+    (props.stateVariables ?? [])
+      .filter((variable) => variable.scope === 'visitor')
+      .map((variable) => [variable.key, visitorState[variable.key] ?? variable.initialValue])
+  )
+  window.localStorage.setItem(localStorageKey.value, JSON.stringify(values))
+}
+
+async function loadGlobalState() {
+  if (!props.spaceHandle) return
+
+  try {
+    const result = await $fetch<{ values: Record<string, StateValue> }>(`/api/spaces/${props.spaceHandle}/state`)
+    Object.assign(globalState, result.values)
+  } catch {
+    // Missing global state should not block local canvas rendering.
+  }
+}
+
 function select(node: CanvasNode | null) {
   selectedId.value = node?.id ?? ''
+  selectedIds.value = node ? groupSelectionIds(node) : []
   emit('select', node ? { ...node } : null)
+}
+
+function groupSelectionIds(node: CanvasNode) {
+  if (!node.groupId) return [node.id]
+  return localNodes.value.filter((item) => item.groupId === node.groupId).map((item) => item.id)
+}
+
+function activeSelectionIds() {
+  return selectedIds.value.length ? selectedIds.value : selectedId.value ? [selectedId.value] : []
+}
+
+function isSelected(node: CanvasNode) {
+  return activeSelectionIds().includes(node.id)
+}
+
+function toggleMultiSelection(node: CanvasNode) {
+  const groupIds = groupSelectionIds(node)
+  const current = new Set(activeSelectionIds())
+  const alreadySelected = groupIds.every((id) => current.has(id))
+
+  if (alreadySelected) {
+    for (const id of groupIds) current.delete(id)
+  } else {
+    for (const id of groupIds) current.add(id)
+  }
+
+  selectedIds.value = [...current]
+  selectedId.value = selectedIds.value.at(-1) ?? ''
+  const selected = selectedNode()
+  emit('select', selected ? { ...selected } : null)
+}
+
+function selectForPointer(event: PointerEvent, node: CanvasNode) {
+  if (event.shiftKey) {
+    toggleMultiSelection(node)
+    return
+  }
+
+  if (!isSelected(node)) {
+    select(node)
+  }
 }
 
 function nodeStyle(node: CanvasNode) {
@@ -342,7 +479,7 @@ function onLineHandlePointerDown(event: PointerEvent, node: CanvasNode, point: '
     return
   }
 
-  select(node)
+  selectForPointer(event, node)
   if (recordHistory) pushHistory()
 
   const target = event.currentTarget as HTMLElement
@@ -398,7 +535,7 @@ function onLinePathPointerDown(event: PointerEvent, node: CanvasNode) {
     return
   }
 
-  select(node)
+  selectForPointer(event, node)
   const point = eventToLinePoint(event, node)
 
   if (!lineHasBend(node)) {
@@ -499,7 +636,92 @@ function parseActionValue(action: CanvasAction, target: CanvasNode) {
   return fallback
 }
 
-function runAction(action: CanvasAction) {
+function stateValue(key: string) {
+  const variable = stateVariable(key)
+  if (!variable) return undefined
+  return variable.scope === 'global'
+    ? globalState[key] ?? variable.initialValue
+    : visitorState[key] ?? variable.initialValue
+}
+
+function interpolateStateText(value?: string) {
+  return String(value ?? '').replace(/%([a-zA-Z0-9_-]+)%/g, (match, key: string) => {
+    const value = stateValue(key)
+    return value === undefined ? match : String(value)
+  })
+}
+
+function conditionMatches(condition: NonNullable<CanvasTrigger['conditions']>[number]) {
+  const current = stateValue(condition.stateKey)
+  const expected = condition.value
+
+  if (condition.operator === 'truthy') return Boolean(current)
+  if (condition.operator === 'falsy') return !Boolean(current)
+  if (condition.operator === 'not-equals') return current !== expected
+  if (condition.operator === 'greater-than') return Number(current) > Number(expected)
+  if (condition.operator === 'less-than') return Number(current) < Number(expected)
+  return current === expected
+}
+
+function triggerConditionsMatch(trigger: CanvasTrigger) {
+  return (trigger.conditions ?? []).every(conditionMatches)
+}
+
+function coerceStateActionValue(value: unknown, fallback: StateValue): StateValue {
+  if (typeof fallback === 'number') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+
+  if (typeof fallback === 'boolean') {
+    return value === true || value === 'true' || value === '1'
+  }
+
+  return String(value ?? '')
+}
+
+async function runStateAction(action: CanvasAction, feedSafe = false) {
+  const variable = stateVariable(action.stateKey)
+  if (!variable) return
+
+  const current = stateValue(variable.key) ?? variable.initialValue
+  let nextValue: StateValue = current
+
+  if (action.type === 'set-state') {
+    nextValue = coerceStateActionValue(action.value, variable.initialValue)
+  } else if (action.type === 'toggle-state') {
+    nextValue = !Boolean(current)
+  } else if (action.type === 'increment-state') {
+    const amount = Number(action.value ?? 1)
+    nextValue = Number(current) + (Number.isFinite(amount) ? amount : 1)
+  }
+
+  if (variable.scope === 'visitor' || feedSafe) {
+    visitorState[variable.key] = nextValue
+    saveVisitorState()
+    return
+  }
+
+  if (!props.spaceHandle) return
+
+  try {
+    const result = await $fetch<{ values: Record<string, StateValue> }>(`/api/spaces/${props.spaceHandle}/state`, {
+      method: 'POST',
+      body: {
+        type: action.type,
+        stateKey: variable.key,
+        value: action.value
+      }
+    })
+    Object.assign(globalState, result.values)
+  } catch {
+    // Rate limits and auth failures intentionally leave local rendering unchanged.
+  }
+}
+
+function runAction(action: CanvasAction, feedSafe = false) {
+  if (feedSafe && !visualPreviewActions.has(action.type)) return
+
     const target = action.targetId
       ? localNodes.value.find((node) => node.id === action.targetId)
       : null
@@ -507,8 +729,8 @@ function runAction(action: CanvasAction) {
     if (action.type === 'toggle' && target) target.hidden = !target.hidden
     if (action.type === 'show' && target) target.hidden = false
     if (action.type === 'hide' && target) target.hidden = true
-    if (action.type === 'toggle-audio' && target?.kind === 'audio') toggleMediaPlayback(target)
-    if (action.type === 'toggle-video' && target?.kind === 'video') toggleMediaPlayback(target)
+    if (!feedSafe && action.type === 'toggle-audio' && target && ['audio', 'video'].includes(target.kind)) toggleMediaPlayback(target)
+    if (!feedSafe && action.type === 'toggle-video' && target && ['audio', 'video'].includes(target.kind)) toggleMediaPlayback(target)
     if (action.type === 'tint' && target && action.color) target.color = action.color
     if (action.type === 'animate' && target) target.animation = action.animation ?? 'pulse'
     if (action.type === 'set-property' && target && action.property) {
@@ -516,22 +738,23 @@ function runAction(action: CanvasAction) {
         [action.property]: parseActionValue(action, target)
       })
     }
-    if (action.type === 'focus' && action.fragmentId) focusFragment(action.fragmentId)
-    if (action.type === 'message') runTriggers('message', undefined, action.message)
+    if (!feedSafe && action.type === 'focus' && action.fragmentId) focusFragment(action.fragmentId)
+    if (!feedSafe && action.type === 'message') runTriggers('message', undefined, action.message)
+    if (['set-state', 'toggle-state', 'increment-state'].includes(action.type)) void runStateAction(action, feedSafe)
 
   sync()
 }
 
-function runActions(actions: CanvasAction[]) {
+function runActions(actions: CanvasAction[], feedSafe = false) {
   for (const action of actions) {
     const delayMs = Math.max(0, Number(action.delayMs ?? 0))
 
     if (delayMs > 0) {
-      window.setTimeout(() => runAction(action), delayMs)
+      window.setTimeout(() => runAction(action, feedSafe), delayMs)
       continue
     }
 
-    runAction(action)
+    runAction(action, feedSafe)
   }
 }
 
@@ -540,10 +763,122 @@ function runTriggers(type: CanvasTrigger['type'], sourceId?: string, message?: s
     if (trigger.type !== type) return false
     if (type === 'message') return trigger.message === message
     return trigger.sourceId === sourceId
-  })
+  }).filter(triggerConditionsMatch)
 
   for (const trigger of matches) {
     runActions(trigger.actions)
+  }
+}
+
+async function loadGuestbook(nodeId: string) {
+  if (!props.spaceHandle || guestbookEntries[nodeId]) return
+
+  try {
+    const result = await $fetch<{ entries: GuestbookEntry[] }>(`/api/spaces/${props.spaceHandle}/guestbook`, {
+      query: { nodeId }
+    })
+    guestbookEntries[nodeId] = result.entries
+  } catch {
+    guestbookEntries[nodeId] = []
+  }
+}
+
+async function submitGuestbook(node: CanvasNode) {
+  if (!props.spaceHandle || !props.authUser || guestbookBusy.value) return
+
+  const body = guestbookDrafts[node.id]?.trim()
+  if (!body) return
+
+  guestbookBusy.value = node.id
+  guestbookErrors[node.id] = ''
+
+  try {
+    const result = await $fetch<{ entries: GuestbookEntry[] }>(`/api/spaces/${props.spaceHandle}/guestbook`, {
+      method: 'POST',
+      body: {
+        nodeId: node.id,
+        body
+      }
+    })
+    guestbookEntries[node.id] = result.entries
+    guestbookDrafts[node.id] = ''
+  } catch (error: any) {
+    guestbookErrors[node.id] = error?.data?.statusMessage ?? 'guestbook_failed'
+  } finally {
+    guestbookBusy.value = ''
+  }
+}
+
+async function deleteGuestbookEntry(node: CanvasNode, entryId: string) {
+  if (!props.spaceHandle || !props.authUser) return
+
+  try {
+    const result = await $fetch<{ entries: GuestbookEntry[] }>(`/api/spaces/${props.spaceHandle}/guestbook/${entryId}`, {
+      method: 'DELETE'
+    })
+    guestbookEntries[node.id] = result.entries
+  } catch {
+    guestbookErrors[node.id] = 'delete_failed'
+  }
+}
+
+function viewportCenter() {
+  const stage = stageRef.value
+  if (!stage) return { x: 0, y: 0 }
+
+  return {
+    x: (stage.clientWidth / 2 - viewport.x) / viewport.zoom,
+    y: (stage.clientHeight / 2 - viewport.y) / viewport.zoom
+  }
+}
+
+function enableSoundZones() {
+  soundEnabled.value = true
+  updateSoundZones()
+}
+
+function pauseSoundZones() {
+  for (const node of localNodes.value) {
+    if (node.kind !== 'audio') continue
+    const mediaElement = findNodeElement(node.id)?.querySelector('audio') as HTMLAudioElement | null
+    mediaElement?.pause()
+  }
+}
+
+function updateSoundZones() {
+  if (props.mode !== 'view') return
+
+  const center = viewportCenter()
+
+  for (const node of localNodes.value) {
+    if (node.kind !== 'audio' || !node.soundZoneEnabled) continue
+
+    const nodeElement = findNodeElement(node.id)
+    const mediaElement = nodeElement?.querySelector('audio') as HTMLAudioElement | null
+    if (!mediaElement) continue
+
+    const radius = Math.max(1, Number(node.soundZoneRadius ?? 360))
+    const falloff = Math.max(0, Math.min(radius, Number(node.soundZoneFalloff ?? radius * 0.35)))
+    const maxVolume = Math.max(0, Math.min(1, Number(node.soundZoneMaxVolume ?? 0.75)))
+    const nodeCenter = {
+      x: node.x + node.w / 2,
+      y: node.y + node.h / 2
+    }
+    const distance = Math.hypot(center.x - nodeCenter.x, center.y - nodeCenter.y)
+    const fadeStart = Math.max(0, radius - falloff)
+    const strength = distance <= fadeStart
+      ? 1
+      : distance >= radius
+        ? 0
+        : 1 - ((distance - fadeStart) / Math.max(1, falloff))
+
+    mediaElement.volume = Math.max(0, Math.min(maxVolume, strength * maxVolume))
+
+    if (!soundEnabled.value || strength <= 0.01) {
+      mediaElement.pause()
+    } else if (mediaElement.paused) {
+      void mediaElement.play().catch(() => undefined)
+    }
   }
 }
 
@@ -576,6 +911,7 @@ function onWheel(event: WheelEvent) {
   viewport.zoom = nextZoom
   viewport.x = pointerX - worldX * nextZoom
   viewport.y = pointerY - worldY * nextZoom
+  updateSoundZones()
 }
 
 function onNodePointerDown(event: PointerEvent, node: CanvasNode) {
@@ -583,15 +919,16 @@ function onNodePointerDown(event: PointerEvent, node: CanvasNode) {
     return
   }
 
-  select(node)
+  selectForPointer(event, node)
 
   const startX = event.clientX
   const startY = event.clientY
-  const originalX = node.x
-  const originalY = node.y
+  const draggedIds = activeSelectionIds().includes(node.id) ? activeSelectionIds() : [node.id]
+  const draggedNodes = localNodes.value.filter((item) => draggedIds.includes(item.id))
+  const originals = new Map(draggedNodes.map((item) => [item.id, { x: item.x, y: item.y }]))
   const target = event.currentTarget as HTMLElement
-  let nextX = node.x
-  let nextY = node.y
+  let deltaX = 0
+  let deltaY = 0
   let raf = 0
 
   pushHistory()
@@ -600,15 +937,19 @@ function onNodePointerDown(event: PointerEvent, node: CanvasNode) {
   target.setPointerCapture(event.pointerId)
 
   const commitDrag = () => {
-    node.x = nextX
-    node.y = nextY
+    for (const item of draggedNodes) {
+      const original = originals.get(item.id)
+      if (!original) continue
+      item.x = original.x + deltaX
+      item.y = original.y + deltaY
+    }
     raf = 0
     emit('select', { ...node })
   }
 
   const move = (moveEvent: PointerEvent) => {
-    nextX = originalX + (moveEvent.clientX - startX) / viewport.zoom
-    nextY = originalY + (moveEvent.clientY - startY) / viewport.zoom
+    deltaX = (moveEvent.clientX - startX) / viewport.zoom
+    deltaY = (moveEvent.clientY - startY) / viewport.zoom
     if (!raf) {
       raf = window.requestAnimationFrame(commitDrag)
     }
@@ -637,7 +978,7 @@ function onResizePointerDown(
   corner: 'nw' | 'ne' | 'sw' | 'se'
 ) {
   event.stopPropagation()
-  select(node)
+  selectForPointer(event, node)
 
   if (props.mode !== 'edit') {
     return
@@ -740,13 +1081,39 @@ function toggleMediaPlayback(target: CanvasNode) {
   if (!nodeElement) return
 
   const mediaElement = nodeElement.querySelector('audio, video') as HTMLMediaElement | null
-  if (!mediaElement) return
-
-  if (mediaElement.paused) {
-    void mediaElement.play().catch(() => undefined)
-  } else {
-    mediaElement.pause()
+  if (mediaElement) {
+    if (mediaElement.paused) {
+      void mediaElement.play().catch(() => undefined)
+    } else {
+      mediaElement.pause()
+    }
+    return
   }
+
+  toggleEmbeddedPlayback(target, nodeElement)
+}
+
+function toggleEmbeddedPlayback(target: CanvasNode, nodeElement: HTMLElement) {
+  const media = normalizeMediaRef(target.media, mediaKindFromNodeKind(target.kind) ?? undefined)
+  const iframe = nodeElement.querySelector('iframe') as HTMLIFrameElement | null
+
+  if (!iframe?.contentWindow || !media || !['youtube', 'vimeo'].includes(media.provider)) return
+
+  const playing = embeddedPlaybackState.has(target.id)
+  embeddedPlaybackState[playing ? 'delete' : 'add'](target.id)
+
+  if (media.provider === 'youtube') {
+    iframe.contentWindow.postMessage(JSON.stringify({
+      event: 'command',
+      func: playing ? 'pauseVideo' : 'playVideo',
+      args: []
+    }), 'https://www.youtube.com')
+    return
+  }
+
+  iframe.contentWindow.postMessage({
+    method: playing ? 'pause' : 'play'
+  }, 'https://player.vimeo.com')
 }
 
 function onStagePointerDown(event: PointerEvent) {
@@ -754,7 +1121,7 @@ function onStagePointerDown(event: PointerEvent) {
     return
   }
 
-  select(null)
+  if (!event.shiftKey) select(null)
 
   const stage = stageRef.value
   if (!stage) return
@@ -769,6 +1136,7 @@ function onStagePointerDown(event: PointerEvent) {
   const move = (moveEvent: PointerEvent) => {
     viewport.x = originalX + moveEvent.clientX - startX
     viewport.y = originalY + moveEvent.clientY - startY
+    updateSoundZones()
   }
 
   const up = () => {
@@ -787,8 +1155,8 @@ function addNode(kind: CanvasNode['kind']) {
 
   const z = Math.max(...localNodes.value.map((node) => node.z), 0) + 1
   const center = viewportCenterWorldPosition()
-  const width = kind === 'text' ? 280 : kind === 'line' ? 260 : 220
-  const height = kind === 'text' ? 120 : kind === 'line' ? 80 : 180
+  const width = kind === 'text' ? 280 : kind === 'line' ? 260 : kind === 'guestbook' ? 300 : 220
+  const height = kind === 'text' ? 120 : kind === 'line' ? 80 : kind === 'guestbook' ? 260 : 180
   const node = buildNode(kind, {
     x: center.x - width / 2,
     y: center.y - height / 2,
@@ -801,9 +1169,46 @@ function addNode(kind: CanvasNode['kind']) {
   return node
 }
 
+function groupSelected() {
+  const ids = [...new Set(activeSelectionIds())]
+  const targets = localNodes.value.filter((node) => ids.includes(node.id) && !node.locked)
+  if (targets.length < 2) return
+
+  pushHistory()
+  const groupId = `group-${crypto.randomUUID().slice(0, 8)}`
+  for (const node of targets) {
+    node.groupId = groupId
+  }
+  selectedIds.value = targets.map((node) => node.id)
+  selectedId.value = targets.at(-1)?.id ?? ''
+  const selected = selectedNode()
+  emit('select', selected ? { ...selected } : null)
+  sync()
+}
+
+function ungroupSelected() {
+  const selected = selectedNode()
+  const groupIds = new Set(
+    localNodes.value
+      .filter((node) => activeSelectionIds().includes(node.id) || (selected?.groupId && node.groupId === selected.groupId))
+      .map((node) => node.groupId)
+      .filter((groupId): groupId is string => Boolean(groupId))
+  )
+  if (!groupIds.size) return
+
+  pushHistory()
+  for (const node of localNodes.value) {
+    if (node.groupId && groupIds.has(node.groupId)) {
+      node.groupId = undefined
+    }
+  }
+  selectedIds.value = selectedId.value ? [selectedId.value] : []
+  sync()
+}
+
 function buildNode(kind: CanvasNode['kind'], patch: Partial<CanvasNode> = {}): CanvasNode {
-  const width = kind === 'text' ? 280 : kind === 'line' ? 260 : 220
-  const height = kind === 'text' ? 120 : kind === 'line' ? 80 : 180
+  const width = kind === 'text' ? 280 : kind === 'line' ? 260 : kind === 'guestbook' ? 300 : 220
+  const height = kind === 'text' ? 120 : kind === 'line' ? 80 : kind === 'guestbook' ? 260 : 180
 
   return {
     id: `${kind}-${crypto.randomUUID().slice(0, 8)}`,
@@ -837,6 +1242,12 @@ function buildNode(kind: CanvasNode['kind'], patch: Partial<CanvasNode> = {}): C
     effect: 'none',
     animation: 'none',
     animationMs: 1800,
+    guestbookPrompt: kind === 'guestbook' ? 'leave a note' : undefined,
+    guestbookMaxEntries: kind === 'guestbook' ? 40 : undefined,
+    soundZoneEnabled: kind === 'audio' ? false : undefined,
+    soundZoneRadius: kind === 'audio' ? 360 : undefined,
+    soundZoneFalloff: kind === 'audio' ? 120 : undefined,
+    soundZoneMaxVolume: kind === 'audio' ? 0.75 : undefined,
     ...patch
   }
 }
@@ -852,40 +1263,73 @@ function updateSelected(patch: Partial<CanvasNode>) {
 }
 
 function removeSelected() {
-  const selected = localNodes.value.find((node) => node.id === selectedId.value)
-  if (selected?.locked) return
+  const ids = new Set(activeSelectionIds())
+  const targets = localNodes.value.filter((node) => ids.has(node.id))
+  if (targets.some((node) => node.locked)) return
 
   pushHistory()
-  localNodes.value = localNodes.value.filter((node) => node.id !== selectedId.value)
+  localNodes.value = localNodes.value.filter((node) => !ids.has(node.id))
   select(null)
   sync()
 }
 
 function duplicateSelected() {
-  const node = localNodes.value.find((item) => item.id === selectedId.value)
-  if (!node) return
-  if (node.locked) return
+  const ids = new Set(activeSelectionIds())
+  const nodes = localNodes.value.filter((item) => ids.has(item.id))
+  if (!nodes.length || nodes.some((node) => node.locked)) return
 
   pushHistory()
-  const next = {
-    ...node,
-    id: `${node.kind}-${crypto.randomUUID().slice(0, 8)}`,
-    x: node.x + 34,
-    y: node.y + 34,
-    z: Math.max(...localNodes.value.map((item) => item.z), 0) + 1
-  }
+  const groupIdMap = new Map<string, string>()
+  let z = Math.max(...localNodes.value.map((item) => item.z), 0) + 1
+  const nextNodes = nodes.map((node) => {
+    const nextGroupId = node.groupId
+      ? groupIdMap.get(node.groupId) ?? `group-${crypto.randomUUID().slice(0, 8)}`
+      : undefined
 
-  localNodes.value.push(next)
-  select(next)
+    if (node.groupId && nextGroupId) groupIdMap.set(node.groupId, nextGroupId)
+
+    return {
+      ...node,
+      id: `${node.kind}-${crypto.randomUUID().slice(0, 8)}`,
+      groupId: nextGroupId,
+      x: node.x + 34,
+      y: node.y + 34,
+      z: z++
+    }
+  })
+
+  localNodes.value.push(...nextNodes)
+  selectedIds.value = nextNodes.map((node) => node.id)
+  selectedId.value = nextNodes.at(-1)?.id ?? ''
+  const selected = selectedNode()
+  emit('select', selected ? { ...selected } : null)
   sync()
 }
 
 function bringForward() {
-  updateSelected({ z: Math.max(...localNodes.value.map((node) => node.z), 0) + 1 })
+  const ids = new Set(activeSelectionIds())
+  const targets = localNodes.value.filter((node) => ids.has(node.id))
+  if (!targets.length) return
+
+  pushHistory()
+  let z = Math.max(...localNodes.value.map((node) => node.z), 0) + 1
+  for (const target of targets.sort((a, b) => a.z - b.z)) {
+    target.z = z++
+  }
+  sync()
 }
 
 function sendBackward() {
-  updateSelected({ z: Math.min(...localNodes.value.map((node) => node.z), 0) - 1 })
+  const ids = new Set(activeSelectionIds())
+  const targets = localNodes.value.filter((node) => ids.has(node.id))
+  if (!targets.length) return
+
+  pushHistory()
+  let z = Math.min(...localNodes.value.map((node) => node.z), 0) - targets.length
+  for (const target of targets.sort((a, b) => a.z - b.z)) {
+    target.z = z++
+  }
+  sync()
 }
 
 function screenRectToWorldBounds(rect: { x: number; y: number; w: number; h: number }) {
@@ -960,10 +1404,12 @@ onMounted(() => {
   focusFragment(props.fragments[0]?.id ?? '')
   const loadTrigger = props.triggers.find((trigger) => trigger.type === 'load')
   if (loadTrigger) runActions(loadTrigger.actions)
+  window.setTimeout(updateSoundZones, 50)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onKeyDown)
+  pauseSoundZones()
 })
 </script>
 
@@ -1003,6 +1449,8 @@ onBeforeUnmount(() => {
           `anim-${node.animation ?? 'none'}`,
           {
             selected: selectedId === node.id,
+            'multi-selected': isSelected(node) && selectedId !== node.id,
+            grouped: Boolean(node.groupId),
             editable: mode === 'edit',
             interpolated: node.interpolate !== false,
             tilted: props.rasterization !== false && Boolean(node.tiltX || node.tiltY),
@@ -1041,7 +1489,7 @@ onBeforeUnmount(() => {
                   v-if="node.arrowHeadStyle === 'lines'"
                   d="M1,1 L7,4 L1,7"
                   fill="none"
-                  stroke="currentColor"
+                  :stroke="node.color"
                   stroke-width="1.5"
                   stroke-linecap="round"
                   stroke-linejoin="round"
@@ -1049,7 +1497,7 @@ onBeforeUnmount(() => {
                 <path
                   v-else
                   d="M0,0 L8,4 L0,8 Z"
-                  fill="currentColor"
+                  :fill="node.color"
                 />
               </marker>
             </defs>
@@ -1088,15 +1536,50 @@ onBeforeUnmount(() => {
             />
           </template>
         </template>
-        <span v-else-if="node.kind === 'text'" class="node-text" v-html="renderRichText(node.text)"></span>
-        <span v-else-if="node.kind === 'portal'" class="node-portal">{{ node.text }}</span>
+        <span v-else-if="node.kind === 'text'" class="node-text" v-html="renderRichText(interpolateStateText(node.text))"></span>
+        <span v-else-if="node.kind === 'portal'" class="node-portal">{{ interpolateStateText(node.text) }}</span>
+        <div v-else-if="node.kind === 'guestbook'" class="node-guestbook">
+          <strong>{{ interpolateStateText(node.guestbookPrompt || node.text || 'guestbook') }}</strong>
+          <div class="guestbook-entry-list">
+            <span v-for="entry in guestbookEntries[node.id] ?? []" :key="entry.id" class="guestbook-entry">
+              <span>
+                <b>@{{ entry.author.handle }}</b>
+                {{ entry.body }}
+              </span>
+              <button
+                v-if="entry.canDelete"
+                type="button"
+                aria-label="delete entry"
+                @click.stop="deleteGuestbookEntry(node, entry.id)"
+              >
+                x
+              </button>
+            </span>
+          </div>
+          <form v-if="mode === 'view' && authUser" class="guestbook-form" @submit.prevent="submitGuestbook(node)">
+            <input
+              v-model="guestbookDrafts[node.id]"
+              maxlength="180"
+              placeholder="leave a note"
+              @click.stop
+              @pointerdown.stop
+            />
+            <button type="submit" :disabled="guestbookBusy === node.id || !guestbookDrafts[node.id]?.trim()">
+              {{ guestbookBusy === node.id ? '...' : 'post' }}
+            </button>
+          </form>
+          <NuxtLink v-else-if="mode === 'view'" class="guestbook-login" to="/login" @click.stop>
+            log in to sign
+          </NuxtLink>
+          <span v-if="guestbookErrors[node.id]" class="guestbook-error">{{ guestbookErrors[node.id] }}</span>
+        </div>
         <NodeMediaContent
           v-else-if="normalizeMediaRef(node.media, mediaKindFromNodeKind(node.kind) ?? undefined)"
           :node="node"
         />
-        <span v-else class="node-label">{{ node.text }}</span>
+        <span v-else class="node-label">{{ interpolateStateText(node.text) }}</span>
 
-        <template v-if="mode === 'edit' && selectedId === node.id && node.kind !== 'line'">
+        <template v-if="mode === 'edit' && selectedId === node.id">
           <button
             v-for="corner in ['nw', 'ne', 'sw', 'se']"
             :key="corner"
@@ -1111,5 +1594,13 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="zoom-readout">{{ Math.round(viewport.zoom * 100) }}</div>
+    <button
+      v-if="hasSoundZones && !soundEnabled"
+      type="button"
+      class="sound-enable"
+      @click.stop="enableSoundZones"
+    >
+      enable sound
+    </button>
   </div>
 </template>

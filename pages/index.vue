@@ -117,12 +117,14 @@ function previewNodeStyle(node: CanvasNode, fragment: FeedFragment) {
   return {
     width: `${node.w}px`,
     height: `${node.h}px`,
-    transform: `translate(${node.x - fragment.bounds.x}px, ${node.y - fragment.bounds.y}px) ${rotate} ${nodeScale} ${tilt}`,
+    left: `${node.x - fragment.bounds.x}px`,
+    top: `${node.y - fragment.bounds.y}px`,
+    transform: `${rotate} ${nodeScale} ${tilt}`,
     transformOrigin: node.kind === 'line' ? lineTransformOrigin(node) : 'center center',
     zIndex: node.z,
     opacity: node.opacity ?? 1,
     background: node.kind === 'line' ? 'transparent' : node.color,
-    color: node.textColor ?? (node.kind === 'video' || node.kind === 'audio' || node.kind === 'portal' ? '#ffffff' : '#101010'),
+    color: node.kind === 'line' ? node.color : (node.textColor ?? (node.kind === 'video' || node.kind === 'audio' || node.kind === 'portal' ? '#ffffff' : '#101010')),
     borderColor: node.kind === 'line' ? 'transparent' : (node.borderColor ?? '#101010'),
     borderWidth: node.kind === 'line' ? 0 : `${node.borderWidth ?? 1}px`,
     borderRadius: `${node.radius ?? 0}px`,
@@ -169,6 +171,13 @@ function previewScale(fragment: FeedFragment, index: number) {
   const height = Math.max(1, fragment.bounds.h)
   const targetWidth = index % 6 === 0 || index % 6 === 4 ? 440 : 260
   return Math.min(targetWidth / width, previewHeight(index) / height)
+}
+
+function interpolatePreviewText(value: string | undefined, fragment: FeedFragment) {
+  return String(value ?? '').replace(/%([a-zA-Z0-9_-]+)%/g, (match, key: string) => {
+    const variable = fragment.stateVariables?.find((item) => item.key === key)
+    return variable ? String(variable.initialValue) : match
+  })
 }
 
 function linePoint(node: CanvasNode, point: 'start' | 'bend' | 'end', axis: 'x' | 'y') {
@@ -297,7 +306,7 @@ function linePath(node: CanvasNode) {
                       v-if="node.arrowHeadStyle === 'lines'"
                       d="M1,1 L7,4 L1,7"
                       fill="none"
-                      stroke="currentColor"
+                      :stroke="node.color"
                       stroke-width="1.5"
                       stroke-linecap="round"
                       stroke-linejoin="round"
@@ -305,7 +314,7 @@ function linePath(node: CanvasNode) {
                     <path
                       v-else
                       d="M0,0 L8,4 L0,8 Z"
-                      fill="currentColor"
+                      :fill="node.color"
                     />
                   </marker>
                 </defs>
@@ -322,10 +331,11 @@ function linePath(node: CanvasNode) {
                   :style="lineEffectStyle(node)"
                 />
               </svg>
-              <span v-else-if="node.kind === 'text'" class="node-text" v-html="renderRichText(node.text)"></span>
-              <span v-else-if="node.kind === 'portal'" class="node-portal">{{ node.text }}</span>
+              <span v-else-if="node.kind === 'text'" class="node-text" v-html="renderRichText(interpolatePreviewText(node.text, fragment))"></span>
+              <span v-else-if="node.kind === 'portal'" class="node-portal">{{ interpolatePreviewText(node.text, fragment) }}</span>
+              <span v-else-if="node.kind === 'guestbook'" class="node-label">{{ interpolatePreviewText(node.guestbookPrompt || node.text || 'guestbook', fragment) }}</span>
               <NodeMediaContent v-else-if="node.media" :node="node" context="feed" />
-              <span v-else class="node-label">{{ node.text }}</span>
+              <span v-else class="node-label">{{ interpolatePreviewText(node.text, fragment) }}</span>
             </div>
           </span>
           </span>

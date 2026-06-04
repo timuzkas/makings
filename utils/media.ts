@@ -37,7 +37,7 @@ export function normalizeMediaRef(value: CanvasNode['media'], fallbackKind?: Nod
   return {
     ...value,
     kind,
-    src: value.src.trim()
+    src: normalizeEmbedSrc(value.src.trim(), value.provider)
   }
 }
 
@@ -62,7 +62,10 @@ export function parseEmbedUrl(raw: string, fallbackKind?: NodeMediaKind): NodeMe
       mode: 'embed',
       kind: 'video',
       provider: 'youtube',
-      src: `https://www.youtube.com/embed/${youtubeId}`
+      src: withEmbedParams(`https://www.youtube.com/embed/${youtubeId}`, {
+        enablejsapi: '1',
+        playsinline: '1'
+      })
     }
   }
 
@@ -72,7 +75,9 @@ export function parseEmbedUrl(raw: string, fallbackKind?: NodeMediaKind): NodeMe
       mode: 'embed',
       kind: 'video',
       provider: 'vimeo',
-      src: `https://player.vimeo.com/video/${vimeoId}`
+      src: withEmbedParams(`https://player.vimeo.com/video/${vimeoId}`, {
+        api: '1'
+      })
     }
   }
 
@@ -150,6 +155,31 @@ function parseVimeoId(url: URL) {
   const segments = url.pathname.split('/').filter(Boolean)
   const candidate = segments.at(-1) ?? ''
   return /^\d+$/.test(candidate) ? candidate : null
+}
+
+function withEmbedParams(src: string, params: Record<string, string>) {
+  const url = new URL(src)
+  for (const [key, value] of Object.entries(params)) {
+    url.searchParams.set(key, value)
+  }
+  return url.toString()
+}
+
+function normalizeEmbedSrc(src: string, provider: NodeMediaProvider) {
+  if (provider === 'youtube') {
+    return withEmbedParams(src, {
+      enablejsapi: '1',
+      playsinline: '1'
+    })
+  }
+
+  if (provider === 'vimeo') {
+    return withEmbedParams(src, {
+      api: '1'
+    })
+  }
+
+  return src
 }
 
 function cleanEmbedId(value: string) {

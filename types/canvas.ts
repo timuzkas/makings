@@ -1,4 +1,4 @@
-export type NodeKind = 'profile' | 'text' | 'shape' | 'line' | 'image' | 'video' | 'audio' | 'portal'
+export type NodeKind = 'profile' | 'text' | 'shape' | 'line' | 'image' | 'video' | 'audio' | 'portal' | 'guestbook'
 export type NodeMediaMode = 'upload' | 'embed'
 export type NodeMediaKind = 'image' | 'audio' | 'video'
 export type NodeMediaProvider = 'direct' | 'youtube' | 'vimeo'
@@ -16,6 +16,13 @@ export type ActionType =
   | 'tint'
   | 'animate'
   | 'set-property'
+  | 'set-state'
+  | 'toggle-state'
+  | 'increment-state'
+
+export type StateScope = 'visitor' | 'global'
+export type StateValue = string | number | boolean
+export type StateOperator = 'equals' | 'not-equals' | 'greater-than' | 'less-than' | 'truthy' | 'falsy'
 
 export type NodeEffect = 'none' | 'shadow' | 'hard-shadow' | 'blur' | 'invert' | 'outline'
 
@@ -51,6 +58,7 @@ export interface CanvasNode {
   z: number
   hidden?: boolean
   locked?: boolean
+  groupId?: string
   interpolate?: boolean
   text?: string
   media?: NodeMediaRef | string
@@ -95,6 +103,19 @@ export interface CanvasNode {
   perspective?: number
   animation?: NodeAnimation
   animationMs?: number
+  guestbookPrompt?: string
+  guestbookMaxEntries?: number
+  soundZoneEnabled?: boolean
+  soundZoneRadius?: number
+  soundZoneFalloff?: number
+  soundZoneMaxVolume?: number
+}
+
+export interface CanvasStateVariable {
+  key: string
+  label: string
+  initialValue: StateValue
+  scope: StateScope
 }
 
 export interface CanvasFragment {
@@ -114,6 +135,7 @@ export interface CanvasFragment {
 export interface FeedFragment extends CanvasFragment {
   nodes: CanvasNode[]
   googleFonts?: string[]
+  stateVariables?: CanvasStateVariable[]
   theme?: SpaceRecord['theme']
   likes?: number
   likedByMe?: boolean
@@ -169,6 +191,7 @@ export interface CanvasAction {
   animation?: NodeAnimation
   property?: string
   value?: string | number | boolean
+  stateKey?: string
 }
 
 export interface CanvasTrigger {
@@ -176,7 +199,22 @@ export interface CanvasTrigger {
   sourceId: string
   type: TriggerType
   message?: string
+  conditions?: Array<{
+    stateKey: string
+    operator: StateOperator
+    value?: StateValue
+  }>
   actions: CanvasAction[]
+}
+
+export interface GuestbookEntry {
+  id: string
+  spaceHandle: string
+  nodeId: string
+  author: PublicUser
+  body: string
+  createdAt: string
+  canDelete?: boolean
 }
 
 export interface SpaceRecord {
@@ -203,5 +241,6 @@ export interface SpaceRecord {
   nodes: CanvasNode[]
   fragments: CanvasFragment[]
   triggers: CanvasTrigger[]
+  stateVariables: CanvasStateVariable[]
   followedByMe?: boolean
 }

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { ActionType, AuthUser, CanvasNode, CanvasTrigger, NodeMediaKind, NodeMediaRef, SpaceLink, SpaceRecord, TriggerType } from '../../types/canvas'
+import type { ActionType, AuthUser, CanvasNode, CanvasStateVariable, CanvasTrigger, NodeMediaKind, NodeMediaRef, SpaceLink, SpaceRecord, StateOperator, StateScope, TriggerType } from '../../types/canvas'
 import { MAX_MEDIA_BYTES, mediaKindFromNodeKind, normalizeMediaRef } from '../../utils/media'
 
 const route = useRoute()
@@ -12,10 +12,21 @@ const mediaBusy = ref(false)
 const mediaError = ref('')
 const followPending = ref(false)
 const googleFontName = ref('')
+const sharedFragmentId = ref('')
 const mediaDraftUrl = ref('')
 const mediaInput = ref<HTMLInputElement | null>(null)
 const capturing = ref(false)
 const effectSettingsOpen = ref(false)
+const variablePicker = reactive({
+  open: false,
+  field: '' as 'text' | 'guestbookPrompt' | 'label' | '',
+  query: '',
+  start: 0,
+  end: 0,
+  activeIndex: 0,
+  x: 0,
+  y: 0
+})
 const captureFrame = reactive({
   x: 180,
   y: 150,
@@ -37,7 +48,17 @@ const triggerDraft = reactive({
   animation: 'pulse' as CanvasNode['animation'],
   property: 'color',
   value: '#35f28f',
+  stateKey: '',
+  conditionStateKey: '',
+  conditionOperator: 'equals' as StateOperator,
+  conditionValue: '',
   delaySeconds: 0
+})
+const stateDraft = reactive({
+  key: '',
+  label: '',
+  initialValue: '',
+  scope: 'visitor' as StateScope
 })
 const editingTriggerId = ref('')
 const triggerProperties = [
@@ -152,7 +173,8 @@ const kindOptions = [
   { label: 'image', value: 'image' },
   { label: 'video', value: 'video' },
   { label: 'audio', value: 'audio' },
-  { label: 'portal', value: 'portal' }
+  { label: 'portal', value: 'portal' },
+  { label: 'guestbook', value: 'guestbook' }
 ]
 const triggerTypeOptions = [
   { label: 'click', value: 'click' },
@@ -170,7 +192,22 @@ const triggerActionOptions = [
   { label: 'send message', value: 'message' },
   { label: 'change color', value: 'tint' },
   { label: 'set animation', value: 'animate' },
-  { label: 'set any property', value: 'set-property' }
+  { label: 'set any property', value: 'set-property' },
+  { label: 'set state', value: 'set-state' },
+  { label: 'toggle state', value: 'toggle-state' },
+  { label: 'increment state', value: 'increment-state' }
+]
+const stateScopeOptions = [
+  { label: 'visitor', value: 'visitor' },
+  { label: 'global', value: 'global' }
+]
+const stateOperatorOptions = [
+  { label: 'equals', value: 'equals' },
+  { label: 'not equals', value: 'not-equals' },
+  { label: 'greater than', value: 'greater-than' },
+  { label: 'less than', value: 'less-than' },
+  { label: 'truthy', value: 'truthy' },
+  { label: 'falsy', value: 'falsy' }
 ]
 const layoutOptions = [
   { label: 'center', value: 'center' },
@@ -219,6 +256,17 @@ const triggerPropertyOptions = computed(() => triggerProperties.map((property) =
   label: property,
   value: property
 })))
+const stateVariableOptions = computed(() => (space.value?.stateVariables ?? []).map((variable) => ({
+  label: `${variable.label || variable.key} (${variable.scope})`,
+  value: variable.key
+})))
+const hasStateVariables = computed(() => Boolean(space.value?.stateVariables?.length))
+const variablePickerOptions = computed(() => {
+  const query = variablePicker.query.toLowerCase()
+  return (space.value?.stateVariables ?? []).filter((variable) => {
+    return variable.key.toLowerCase().includes(query) || variable.label.toLowerCase().includes(query)
+  })
+})
 const selectedMediaKind = computed(() => selected.value ? mediaKindFromNodeKind(selected.value.kind) : null)
 const selectedMedia = computed(() => selected.value ? normalizeMediaRef(selected.value.media, selectedMediaKind.value ?? undefined) : undefined)
 const selectedTriggers = computed(() => {
@@ -276,6 +324,126 @@ function patchSelected(patch: Partial<CanvasNode>) {
   }
   selected.value = { ...selected.value, ...patch }
   surface.value?.updateSelected(patch)
+}
+
+function updateVariablePicker(event: Event, field: 'text' | 'guestbookPrompt' | 'label') {
+  const input = event.target as HTMLInputElement | HTMLTextAreaElement
+  const value = input.value
+  const cursor = input.selectionStart ?? value.length
+  const prefix = value.slice(0, cursor)
+  const match = prefix.match(/%([a-zA-Z0-9_-]*)$/)
+
+  if (!match || !hasStateVariables.value) {
+    variablePicker.open = false
+    return
+  }
+
+  const rect = input.getBoundingClientRect()
+  const dock = input.closest('.property-dock') as HTMLElement | null
+  const dockRect = dock?.getBoundingClientRect()
+  const popoverWidth = 220
+  const minX = 6
+  const maxX = Math.max(minX, (dockRect?.width ?? popoverWidth) - popoverWidth - 6)
+  variablePicker.open = true
+  variablePicker.field = field
+  variablePicker.query = match[1] ?? ''
+  variablePicker.start = cursor - match[0].length
+  variablePicker.end = cursor
+  variablePicker.activeIndex = 0
+  variablePicker.x = Math.max(minX, Math.min(maxX, rect.left - (dockRect?.left ?? 0)))
+  variablePicker.y = Math.max(6, rect.bottom - (dockRect?.top ?? 0) + (dock?.scrollTop ?? 0) + 4)
+}
+
+function onVariableFieldKeydown(event: KeyboardEvent, field: 'text' | 'guestbookPrompt' | 'label') {
+  if (!variablePicker.open) {
+    window.setTimeout(() => updateVariablePicker(event, field), 0)
+    return
+  }
+
+  const options = variablePickerOptions.value
+  if (!options.length) return
+
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    variablePicker.activeIndex = (variablePicker.activeIndex + 1) % options.length
+    return
+  }
+
+  if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    variablePicker.activeIndex = (variablePicker.activeIndex - 1 + options.length) % options.length
+    return
+  }
+
+  if (event.key === 'Enter') {
+    event.preventDefault()
+    void insertStateVariable(options[variablePicker.activeIndex]?.key ?? options[0].key)
+    return
+  }
+
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    variablePicker.open = false
+    return
+  }
+
+  window.setTimeout(() => updateVariablePicker(event, field), 0)
+}
+
+function patchTextWithVariablePicker(event: Event) {
+  patchSelected({ text: ($eventTarget(event) as HTMLTextAreaElement).value })
+  updateVariablePicker(event, 'text')
+}
+
+function patchGuestbookPromptWithVariablePicker(event: Event) {
+  patchSelected({ guestbookPrompt: ($eventTarget(event) as HTMLInputElement).value })
+  updateVariablePicker(event, 'guestbookPrompt')
+}
+
+function patchLabelWithVariablePicker(event: Event) {
+  patchSelected({ label: ($eventTarget(event) as HTMLInputElement).value })
+  updateVariablePicker(event, 'label')
+}
+
+function $eventTarget(event: Event) {
+  return event.target as HTMLInputElement | HTMLTextAreaElement
+}
+
+async function insertStateVariable(key: string) {
+  if (!selected.value || !variablePicker.field) return
+
+  const current = variablePicker.field === 'guestbookPrompt'
+    ? selected.value.guestbookPrompt ?? ''
+    : variablePicker.field === 'label'
+      ? selected.value.label ?? ''
+      : selected.value.text ?? ''
+  const next = `${current.slice(0, variablePicker.start)}%${key}%${current.slice(variablePicker.end)}`
+  const cursor = variablePicker.start + key.length + 2
+
+  patchSelected(
+    variablePicker.field === 'guestbookPrompt'
+      ? { guestbookPrompt: next }
+      : variablePicker.field === 'label'
+        ? { label: next }
+        : { text: next }
+  )
+  variablePicker.open = false
+
+  await nextTick()
+  const selector = variablePicker.field === 'guestbookPrompt'
+    ? '[data-variable-field="guestbookPrompt"]'
+    : variablePicker.field === 'label'
+      ? '[data-variable-field="label"]'
+      : '[data-variable-field="text"]'
+  const input = document.querySelector<HTMLInputElement | HTMLTextAreaElement>(selector)
+  input?.focus()
+  input?.setSelectionRange(cursor, cursor)
+}
+
+function deferCloseVariablePicker() {
+  window.setTimeout(() => {
+    variablePicker.open = false
+  }, 140)
 }
 
 function patchPortalTargetSpaceHandle(value: string) {
@@ -390,6 +558,7 @@ async function persistSpace() {
       nodes: space.value.nodes,
       fragments: space.value.fragments,
       triggers: space.value.triggers,
+      stateVariables: space.value.stateVariables,
       googleFonts: space.value.googleFonts
     }
   })
@@ -418,6 +587,28 @@ async function publishCapture() {
   captureDraft.tags = ''
   capturing.value = false
   await persistSpace()
+}
+
+async function shareFragment(fragmentId: string) {
+  if (!space.value) return
+
+  const url = new URL(`/space/${space.value.handle}`, window.location.origin)
+  url.searchParams.set('fragment', fragmentId)
+  const shareUrl = url.toString()
+
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: space.value.fragments.find((fragment) => fragment.id === fragmentId)?.title ?? space.value.name, url: shareUrl })
+    } else {
+      await navigator.clipboard.writeText(shareUrl)
+    }
+    sharedFragmentId.value = fragmentId
+    window.setTimeout(() => {
+      if (sharedFragmentId.value === fragmentId) sharedFragmentId.value = ''
+    }, 1600)
+  } catch {
+    sharedFragmentId.value = ''
+  }
 }
 
 function patchTags(value: string) {
@@ -538,6 +729,18 @@ function triggerNeedsTarget(action: ActionType) {
   return ['toggle', 'show', 'hide', 'toggle-audio', 'toggle-video', 'tint', 'animate', 'set-property'].includes(action)
 }
 
+function triggerUsesState(action: ActionType) {
+  return ['set-state', 'toggle-state', 'increment-state'].includes(action)
+}
+
+function parseStateDraftValue(value: string) {
+  const trimmed = value.trim()
+  if (trimmed === 'true') return true
+  if (trimmed === 'false') return false
+  if (trimmed !== '' && Number.isFinite(Number(trimmed))) return Number(trimmed)
+  return trimmed
+}
+
 function resetTriggerDraft() {
   editingTriggerId.value = ''
   triggerDraft.type = 'click'
@@ -549,6 +752,10 @@ function resetTriggerDraft() {
   triggerDraft.animation = 'pulse'
   triggerDraft.property = 'color'
   triggerDraft.value = '#35f28f'
+  triggerDraft.stateKey = space.value?.stateVariables?.[0]?.key ?? ''
+  triggerDraft.conditionStateKey = ''
+  triggerDraft.conditionOperator = 'equals'
+  triggerDraft.conditionValue = ''
   triggerDraft.delaySeconds = 0
 }
 
@@ -565,6 +772,10 @@ function editTrigger(trigger: CanvasTrigger) {
   triggerDraft.animation = action?.animation ?? 'pulse'
   triggerDraft.property = action?.property ?? 'color'
   triggerDraft.value = String(action?.value ?? action?.color ?? '#35f28f')
+  triggerDraft.stateKey = action?.stateKey ?? ''
+  triggerDraft.conditionStateKey = trigger.conditions?.[0]?.stateKey ?? ''
+  triggerDraft.conditionOperator = trigger.conditions?.[0]?.operator ?? 'equals'
+  triggerDraft.conditionValue = String(trigger.conditions?.[0]?.value ?? '')
   triggerDraft.delaySeconds = Number(action?.delayMs ?? 0) / 1000
 }
 
@@ -576,6 +787,17 @@ function saveTrigger() {
     sourceId: selected.value.id,
     type: triggerDraft.type,
     message: triggerDraft.type === 'message' ? triggerDraft.message : undefined,
+    conditions: triggerDraft.conditionStateKey
+      ? [
+          {
+            stateKey: triggerDraft.conditionStateKey,
+            operator: triggerDraft.conditionOperator,
+            value: ['truthy', 'falsy'].includes(triggerDraft.conditionOperator)
+              ? undefined
+              : parseStateDraftValue(triggerDraft.conditionValue)
+          }
+        ]
+      : undefined,
     actions: [
       {
         type: triggerDraft.action,
@@ -586,7 +808,8 @@ function saveTrigger() {
         color: triggerDraft.action === 'tint' ? triggerDraft.color : undefined,
         animation: triggerDraft.action === 'animate' ? triggerDraft.animation : undefined,
         property: triggerDraft.action === 'set-property' ? triggerDraft.property : undefined,
-        value: triggerDraft.action === 'set-property' ? triggerDraft.value : undefined
+        value: triggerDraft.action === 'set-property' || triggerUsesState(triggerDraft.action) ? parseStateDraftValue(String(triggerDraft.value)) : undefined,
+        stateKey: triggerUsesState(triggerDraft.action) ? triggerDraft.stateKey : undefined
       }
     ]
   }
@@ -604,6 +827,41 @@ function removeTrigger(id: string) {
   if (!space.value || !canEdit.value) return
   space.value.triggers = space.value.triggers.filter((trigger) => trigger.id !== id)
   if (editingTriggerId.value === id) resetTriggerDraft()
+}
+
+function cleanStateKey(value: string) {
+  return value.trim().toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/(^-|-$)/g, '').slice(0, 32)
+}
+
+function addStateVariable() {
+  if (!space.value || !canEdit.value) return
+
+  const key = cleanStateKey(stateDraft.key || stateDraft.label)
+  if (!key || (space.value.stateVariables ?? []).some((variable) => variable.key === key)) return
+
+  const variable: CanvasStateVariable = {
+    key,
+    label: stateDraft.label.trim() || key,
+    initialValue: parseStateDraftValue(stateDraft.initialValue),
+    scope: stateDraft.scope
+  }
+
+  space.value.stateVariables = [...(space.value.stateVariables ?? []), variable]
+  stateDraft.key = ''
+  stateDraft.label = ''
+  stateDraft.initialValue = ''
+  stateDraft.scope = 'visitor'
+}
+
+function removeStateVariable(key: string) {
+  if (!space.value || !canEdit.value) return
+
+  space.value.stateVariables = (space.value.stateVariables ?? []).filter((variable) => variable.key !== key)
+  space.value.triggers = space.value.triggers.map((trigger) => ({
+    ...trigger,
+    conditions: trigger.conditions?.filter((condition) => condition.stateKey !== key),
+    actions: trigger.actions.filter((action) => action.stateKey !== key)
+  }))
 }
 
 async function deleteFragment(id: string) {
@@ -1016,6 +1274,8 @@ onBeforeUnmount(() => {
       :triggers="space.triggers"
       :mode="mode"
       :space-handle="space.handle"
+      :state-variables="space.stateVariables"
+      :auth-user="auth.user"
       :rasterization="rasterizationEnabled"
       @change="setNodes"
       @select="selectNode"
@@ -1058,6 +1318,15 @@ onBeforeUnmount(() => {
           </button>
           <button
             v-if="canEdit && mode === 'edit'"
+            class="rail-share"
+            type="button"
+            :title="`share ${fragment.title}`"
+            @click="shareFragment(fragment.id)"
+          >
+            {{ sharedFragmentId === fragment.id ? '✓' : '↗' }}
+          </button>
+          <button
+            v-if="canEdit && mode === 'edit'"
             class="rail-delete"
             type="button"
             :title="`delete ${fragment.title}`"
@@ -1076,7 +1345,9 @@ onBeforeUnmount(() => {
         <button type="button" title="Video" @click="surface?.addNode('video')">▶</button>
         <button type="button" title="Audio" @click="surface?.addNode('audio')">≋</button>
         <button type="button" title="Portal" @click="surface?.addNode('portal')">○</button>
+        <button type="button" title="Guestbook" @click="surface?.addNode('guestbook')">✎</button>
       </div>
+
     </aside>
 
     <aside class="mode-switch" aria-label="Mode">
@@ -1123,7 +1394,16 @@ onBeforeUnmount(() => {
     <aside v-if="canEdit && mode === 'edit' && selected" class="property-dock" aria-label="Properties">
       <section class="dock-section">
         <span class="dock-section-label">object</span>
-        <input :value="selected.label ?? ''" aria-label="Object name" placeholder="object name" @input="patchSelected({ label: ($event.target as HTMLInputElement).value })" />
+        <input
+          :value="selected.label ?? ''"
+          aria-label="Object name"
+          placeholder="object name"
+          data-variable-field="label"
+          @input="patchLabelWithVariablePicker"
+          @keydown="onVariableFieldKeydown($event, 'label')"
+          @click="updateVariablePicker($event, 'label')"
+          @blur="deferCloseVariablePicker"
+        />
         <CompactSelect
           label="kind"
           :model-value="selected.kind"
@@ -1153,7 +1433,20 @@ onBeforeUnmount(() => {
           filled head
         </label>
 
-        <textarea v-if="selected.kind !== 'line'" :value="selected.text" aria-label="Text" rows="3" @input="patchSelected({ text: ($event.target as HTMLTextAreaElement).value })" />
+        <textarea
+          v-if="selected.kind !== 'line'"
+          :value="selected.text"
+          aria-label="Text"
+          rows="3"
+          data-variable-field="text"
+          @input="patchTextWithVariablePicker"
+          @keydown="onVariableFieldKeydown($event, 'text')"
+          @click="updateVariablePicker($event, 'text')"
+          @blur="deferCloseVariablePicker"
+        />
+        <span v-if="selected.kind !== 'line' && hasStateVariables" class="state-variable-hint">
+          use %key%
+        </span>
         <PortalTargetPicker
           v-if="selected.kind === 'portal'"
           :current-handle="space.handle"
@@ -1163,6 +1456,25 @@ onBeforeUnmount(() => {
           @update:model-space-handle="patchPortalTargetSpaceHandle"
           @update:model-fragment-id="patchPortalTargetFragmentId"
         />
+        <div v-if="selected.kind === 'guestbook'" class="guestbook-fields">
+          <input
+            :value="selected.guestbookPrompt ?? ''"
+            aria-label="Guestbook prompt"
+            placeholder="prompt"
+            data-variable-field="guestbookPrompt"
+            @input="patchGuestbookPromptWithVariablePicker"
+            @keydown="onVariableFieldKeydown($event, 'guestbookPrompt')"
+            @click="updateVariablePicker($event, 'guestbookPrompt')"
+            @blur="deferCloseVariablePicker"
+          />
+          <span v-if="hasStateVariables" class="state-variable-hint">
+            use %key%
+          </span>
+          <label>
+            <span>max entries</span>
+            <input :value="selected.guestbookMaxEntries ?? 40" type="number" min="1" max="100" @input="patchSelected({ guestbookMaxEntries: Number(($event.target as HTMLInputElement).value) })" />
+          </label>
+        </div>
       </section>
 
       <section v-if="selectedMediaKind" class="dock-section media-fields">
@@ -1196,6 +1508,28 @@ onBeforeUnmount(() => {
           hosted {{ Math.round((selectedMedia.bytes ?? 0) / 1024) }} KB
         </span>
         <span v-if="mediaError" class="media-error">{{ mediaError }}</span>
+      </section>
+
+      <section v-if="selected.kind === 'audio'" class="dock-section">
+        <span class="dock-section-label">sound zone</span>
+        <label class="toggle-row">
+          <input :checked="selected.soundZoneEnabled === true" type="checkbox" @change="patchSelected({ soundZoneEnabled: ($event.target as HTMLInputElement).checked })" />
+          enabled
+        </label>
+        <div class="field-grid">
+          <label>
+            <span>radius</span>
+            <input :value="selected.soundZoneRadius ?? 360" type="number" min="1" @input="patchSelected({ soundZoneRadius: Number(($event.target as HTMLInputElement).value) })" />
+          </label>
+          <label>
+            <span>falloff</span>
+            <input :value="selected.soundZoneFalloff ?? 120" type="number" min="0" @input="patchSelected({ soundZoneFalloff: Number(($event.target as HTMLInputElement).value) })" />
+          </label>
+          <label>
+            <span>volume</span>
+            <input :value="selected.soundZoneMaxVolume ?? 0.75" type="number" min="0" max="1" step="0.05" @input="patchSelected({ soundZoneMaxVolume: Number(($event.target as HTMLInputElement).value) })" />
+          </label>
+        </div>
       </section>
 
         <section v-if="selected.kind === 'profile'" class="dock-section profile-fields">
@@ -1368,16 +1702,6 @@ onBeforeUnmount(() => {
         </div>
       </section>
 
-      <section class="dock-section font-importer">
-          <span class="dock-section-label">fonts</span>
-          <input v-model="googleFontName" aria-label="Google font" placeholder="Google font name" />
-          <button type="button" @click="addGoogleFont">import</button>
-          <div v-for="font in space.googleFonts ?? []" :key="font" class="font-chip">
-            <button type="button" @click="applyGoogleFont(font)">{{ font }}</button>
-            <button type="button" class="font-delete" :aria-label="`Delete ${font}`" @click="removeGoogleFont(font)">x</button>
-          </div>
-      </section>
-
       <section class="dock-section">
         <span class="dock-section-label">actions</span>
         <div class="dock-actions">
@@ -1413,6 +1737,30 @@ onBeforeUnmount(() => {
             <span>after seconds</span>
             <input v-model.number="triggerDraft.delaySeconds" type="number" min="0" step="0.1" placeholder="0.5" />
           </label>
+          <label>
+            <span>state condition</span>
+            <CompactSelect
+              label="if"
+              :model-value="triggerDraft.conditionStateKey || 'none'"
+              :options="[{ label: 'none', value: '' }, ...stateVariableOptions]"
+              @update:model-value="triggerDraft.conditionStateKey = $event"
+            />
+          </label>
+          <div v-if="triggerDraft.conditionStateKey" class="trigger-property-row">
+            <label>
+              <span>operator</span>
+              <CompactSelect
+                label="operator"
+                :model-value="triggerDraft.conditionOperator"
+                :options="stateOperatorOptions"
+                @update:model-value="triggerDraft.conditionOperator = $event as StateOperator"
+              />
+            </label>
+            <label v-if="!['truthy', 'falsy'].includes(triggerDraft.conditionOperator)">
+              <span>value</span>
+              <input v-model="triggerDraft.conditionValue" />
+            </label>
+          </div>
           <label v-if="triggerNeedsTarget(triggerDraft.action)">
             <span>target object</span>
             <CompactSelect
@@ -1429,6 +1777,15 @@ onBeforeUnmount(() => {
               :model-value="triggerDraft.fragmentId || 'none'"
               :options="[{ label: 'none', value: '' }, ...fragmentSelectOptions]"
               @update:model-value="triggerDraft.fragmentId = $event"
+            />
+          </label>
+          <label v-if="triggerUsesState(triggerDraft.action)">
+            <span>state variable</span>
+            <CompactSelect
+              label="state"
+              :model-value="triggerDraft.stateKey || 'none'"
+              :options="[{ label: 'none', value: '' }, ...stateVariableOptions]"
+              @update:model-value="triggerDraft.stateKey = $event"
             />
           </label>
           <label v-if="triggerDraft.action === 'message' || triggerDraft.type === 'message'">
@@ -1463,6 +1820,10 @@ onBeforeUnmount(() => {
               <input v-model="triggerDraft.value" placeholder="+10 / -10 / =-10" />
             </label>
           </div>
+          <label v-if="triggerUsesState(triggerDraft.action) && triggerDraft.action !== 'toggle-state'">
+            <span>{{ triggerDraft.action === 'increment-state' ? 'amount' : 'value' }}</span>
+            <input v-model="triggerDraft.value" />
+          </label>
           <div class="trigger-actions">
             <button type="button" @click="saveTrigger">{{ editingTriggerId ? 'update trigger' : 'add trigger' }}</button>
             <button v-if="editingTriggerId" type="button" @click="resetTriggerDraft">cancel</button>
@@ -1475,10 +1836,63 @@ onBeforeUnmount(() => {
               {{ trigger.type }} -> {{ trigger.actions[0]?.type }}
               <span v-if="trigger.actions[0]?.delayMs"> / {{ (trigger.actions[0].delayMs / 1000).toFixed(1) }}s</span>
               <span v-if="trigger.actions[0]?.property"> / {{ trigger.actions[0]?.property }}</span>
+              <span v-if="trigger.conditions?.[0]"> / if {{ trigger.conditions[0].stateKey }}</span>
+              <span v-if="trigger.actions[0]?.stateKey"> / {{ trigger.actions[0]?.stateKey }}</span>
             </button>
             <button type="button" aria-label="Delete trigger" @click="removeTrigger(trigger.id)">x</button>
           </div>
         </section>
+
+        <details class="dock-section inspector-space-section">
+          <summary>fonts</summary>
+          <div class="inspector-space-body font-importer">
+            <input v-model="googleFontName" aria-label="Google font" placeholder="Google font name" />
+            <button type="button" @click="addGoogleFont">import</button>
+            <div v-for="font in space.googleFonts ?? []" :key="font" class="font-chip">
+              <button type="button" @click="applyGoogleFont(font)">{{ font }}</button>
+              <button type="button" class="font-delete" :aria-label="`Delete ${font}`" @click="removeGoogleFont(font)">x</button>
+            </div>
+          </div>
+        </details>
+
+        <details class="dock-section inspector-space-section">
+          <summary>state</summary>
+          <div class="inspector-space-body state-editor">
+            <div v-for="variable in space.stateVariables ?? []" :key="variable.key" class="state-line">
+              <span>
+                <strong>{{ variable.label }}</strong>
+                <em>{{ variable.key }} / {{ variable.scope }} / {{ variable.initialValue }}</em>
+              </span>
+              <button type="button" aria-label="Delete state variable" @click="removeStateVariable(variable.key)">x</button>
+            </div>
+            <input v-model="stateDraft.label" placeholder="label" aria-label="State label" />
+            <input v-model="stateDraft.key" placeholder="key" aria-label="State key" />
+            <input v-model="stateDraft.initialValue" placeholder="initial value" aria-label="Initial value" />
+            <CompactSelect
+              label="scope"
+              :model-value="stateDraft.scope"
+              :options="stateScopeOptions"
+              @update:model-value="stateDraft.scope = $event as StateScope"
+            />
+            <button type="button" @click="addStateVariable">add state</button>
+          </div>
+        </details>
+        <div
+          v-if="variablePicker.open && variablePickerOptions.length"
+          class="state-variable-popover"
+          :style="{ left: `${variablePicker.x}px`, top: `${variablePicker.y}px` }"
+        >
+          <button
+            v-for="(variable, index) in variablePickerOptions"
+            :key="variable.key"
+            type="button"
+            :class="{ active: index === variablePicker.activeIndex }"
+            @mousedown.prevent="insertStateVariable(variable.key)"
+          >
+            <strong>%{{ variable.key }}%</strong>
+            <span>{{ variable.initialValue }}</span>
+          </button>
+        </div>
     </aside>
   </main>
 </template>

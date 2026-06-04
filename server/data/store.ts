@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
-import type { AuthUser, CanvasFragment, CanvasNode, FeedFragment, PostComment, PublicUser, SpaceRecord, SpaceSummary } from '../../types/canvas'
+import type { AuthUser, CanvasAction, CanvasFragment, CanvasNode, FeedFragment, GuestbookEntry, PostComment, PublicUser, SpaceRecord, SpaceSummary, StateValue } from '../../types/canvas'
 import { cleanupSpaceMedia, normalizeSpaceNodes } from '../utils/media'
 
 const dbPath = join(process.cwd(), '.data', 'spaces.json')
@@ -25,6 +25,9 @@ interface SocialState {
   follows: Array<{ from: string; to: string }>
   likes: Array<{ from: string; fragmentKey: string }>
   comments: Array<{ id: string; fragmentKey: string; authorHandle: string; body: string; createdAt: string }>
+  guestbookEntries: Array<{ id: string; spaceHandle: string; nodeId: string; authorHandle: string; body: string; createdAt: string }>
+  globalState: Array<{ spaceHandle: string; key: string; value: StateValue; updatedAt: string; updatedBy: string }>
+  stateEvents: Array<{ spaceHandle: string; key: string; actorHandle: string; createdAt: string }>
 }
 
 const defaultNodes: CanvasNode[] = [
@@ -227,7 +230,8 @@ const defaultSpaces: SpaceRecord[] = [
           { type: 'focus', fragmentId: 'current-piece' }
         ]
       }
-    ]
+    ],
+    stateVariables: []
   }
 ]
 
@@ -254,7 +258,10 @@ const defaultSocial: SocialState = {
   sessions: [],
   follows: [],
   likes: [],
-  comments: []
+  comments: [],
+  guestbookEntries: [],
+  globalState: [],
+  stateEvents: []
 }
 
 function readDb() {
@@ -284,7 +291,10 @@ function readSocial() {
     sessions: stored.sessions ?? [],
     follows: stored.follows ?? [],
     likes: stored.likes ?? [],
-    comments: stored.comments ?? []
+    comments: stored.comments ?? [],
+    guestbookEntries: stored.guestbookEntries ?? [],
+    globalState: stored.globalState ?? [],
+    stateEvents: stored.stateEvents ?? []
   }
   const hasEna = social.users.some((user) => user.handle === 'ena')
   const next = hasEna ? social : { ...social, users: [...social.users, defaultSocial.users[0]] }
@@ -309,6 +319,7 @@ function normalizeSpace(space: SpaceRecord): SpaceRecord {
       ...space.theme
     },
     googleFonts: space.googleFonts ?? [],
+    stateVariables: space.stateVariables ?? [],
     nodes: space.nodes.map((node) => {
       if (node.id !== 'user-card' || !profileFallback) return node
 
@@ -330,8 +341,6 @@ function normalizeSpace(space: SpaceRecord): SpaceRecord {
 function nodesInFragment(nodes: CanvasNode[], fragment: CanvasFragment) {
   return nodes
     .filter((node) => {
-      if (node.hidden) return false
-
       const nodeRight = node.x + node.w
       const nodeBottom = node.y + node.h
       const fragmentRight = fragment.bounds.x + fragment.bounds.w
@@ -345,6 +354,54 @@ function nodesInFragment(nodes: CanvasNode[], fragment: CanvasFragment) {
     .sort((a, b) => a.z - b.z)
 }
 
+function applyFeedLoadTriggers(nodes: CanvasNode[], space: SpaceRecord) {
+  const previewNodes = JSON.parse(JSON.stringify(nodes)) as CanvasNode[]
+  const previewState = Object.fromEntries(
+    (space.stateVariables ?? [])
+      .map((variable) => [variable.key, variable.initialValue])
+  ) as Record<string, StateValue>
+
+  function conditionsMatch(trigger: SpaceRecord['triggers'][number]) {
+    return (trigger.conditions ?? []).every((condition) => {
+      const current = previewState[condition.stateKey]
+      const expected = condition.value
+
+      if (condition.operator === 'truthy') return Boolean(current)
+      if (condition.operator === 'falsy') return !Boolean(current)
+      if (condition.operator === 'not-equals') return current !== expected
+      if (condition.operator === 'greater-than') return Number(current) > Number(expected)
+      if (condition.operator === 'less-than') return Number(current) < Number(expected)
+      return current === expected
+    })
+  }
+
+  function runAction(action: CanvasAction) {
+    const target = action.targetId ? previewNodes.find((node) => node.id === action.targetId) : null
+
+    if (action.type === 'toggle' && target) target.hidden = !target.hidden
+    if (action.type === 'show' && target) target.hidden = false
+    if (action.type === 'hide' && target) target.hidden = true
+    if (action.type === 'tint' && target && action.color) target.color = action.color
+    if (action.type === 'animate' && target) target.animation = action.animation ?? 'pulse'
+    if (action.type === 'set-property' && target && action.property) {
+      Object.assign(target, { [action.property]: action.value })
+    }
+    if (action.type === 'set-state' && action.stateKey) previewState[action.stateKey] = action.value ?? previewState[action.stateKey] ?? ''
+    if (action.type === 'toggle-state' && action.stateKey) previewState[action.stateKey] = !Boolean(previewState[action.stateKey])
+    if (action.type === 'increment-state' && action.stateKey) previewState[action.stateKey] = Number(previewState[action.stateKey] ?? 0) + Number(action.value ?? 1)
+  }
+
+  for (const trigger of space.triggers.filter((trigger) => trigger.type === 'load' && conditionsMatch(trigger))) {
+    for (const action of trigger.actions) {
+      if (['toggle', 'show', 'hide', 'tint', 'animate', 'set-property', 'set-state', 'toggle-state', 'increment-state'].includes(action.type)) {
+        runAction(action)
+      }
+    }
+  }
+
+  return previewNodes.filter((node) => !node.hidden)
+}
+
 export function listFeed(token?: string) {
   const social = readSocial()
   const viewer = getCurrentUserFromToken(token)
@@ -356,8 +413,9 @@ export function listFeed(token?: string) {
 
       return {
         ...fragment,
-        nodes: nodesInFragment(space.nodes, fragment),
+        nodes: applyFeedLoadTriggers(nodesInFragment(space.nodes, fragment), space),
         googleFonts: space.googleFonts ?? [],
+        stateVariables: space.stateVariables ?? [],
         theme: space.theme,
         likes: social.likes.filter((like) => like.fragmentKey === key).length,
         likedByMe: viewer ? social.likes.some((like) => like.from === viewer.handle && like.fragmentKey === key) : false,
@@ -417,6 +475,7 @@ export function saveSpace(handle: string, incoming: Partial<SpaceRecord>) {
     nodes: incoming.nodes ?? current.nodes,
     fragments: incoming.fragments ?? current.fragments,
     triggers: incoming.triggers ?? current.triggers,
+    stateVariables: incoming.stateVariables ?? current.stateVariables ?? [],
     googleFonts: incoming.googleFonts ?? current.googleFonts,
     theme: incoming.theme ?? current.theme
   })
@@ -453,7 +512,8 @@ function makeSpaceForUser(user: PublicUser): SpaceRecord {
     googleFonts: [],
     nodes,
     fragments: [],
-    triggers: []
+    triggers: [],
+    stateVariables: []
   }
 }
 
@@ -654,5 +714,192 @@ export function addComment(viewerHandle: string, fragment: { handle: string; id:
     comment: commentsForFragment(nextSocial, key).find((item) => item.id === comment.id),
     comments: commentsForFragment(nextSocial, key).slice(-3),
     commentCount: comments.filter((item) => item.fragmentKey === key).length
+  }
+}
+
+function guestbookEntriesForNode(social: SocialState, spaceHandle: string, nodeId: string, viewerHandle?: string | null): GuestbookEntry[] {
+  const space = readDb().find((item) => item.handle === spaceHandle)
+
+  return social.guestbookEntries
+    .filter((entry) => entry.spaceHandle === spaceHandle && entry.nodeId === nodeId)
+    .map((entry) => {
+      const user = social.users.find((item) => item.handle === entry.authorHandle)
+
+      return {
+        id: entry.id,
+        spaceHandle: entry.spaceHandle,
+        nodeId: entry.nodeId,
+        author: user ? publicUser(user) : {
+          handle: entry.authorHandle,
+          name: entry.authorHandle
+        },
+        body: entry.body,
+        createdAt: entry.createdAt,
+        canDelete: viewerHandle === entry.authorHandle || viewerHandle === space?.handle
+      }
+    })
+}
+
+function findGuestbookNode(spaceHandle: string, nodeId: string) {
+  const space = readDb().find((item) => item.handle === spaceHandle)
+  const node = space?.nodes.find((item) => item.id === nodeId && item.kind === 'guestbook')
+  if (!space || !node) throw new Error('guestbook_missing')
+  return { space, node }
+}
+
+export function listGuestbookEntries(spaceHandle: string, nodeId: string, viewerHandle?: string | null) {
+  const { node } = findGuestbookNode(spaceHandle, nodeId)
+  const social = readSocial()
+  return {
+    entries: guestbookEntriesForNode(social, spaceHandle, nodeId, viewerHandle).slice(-(node.guestbookMaxEntries ?? 40))
+  }
+}
+
+export function addGuestbookEntry(viewerHandle: string, spaceHandle: string, nodeId: string, body: string) {
+  const text = body.trim().replace(/\s+/g, ' ')
+  if (!text) throw new Error('empty_guestbook_entry')
+  if (text.length > 180) throw new Error('guestbook_entry_too_long')
+
+  const { node } = findGuestbookNode(spaceHandle, nodeId)
+  const social = readSocial()
+  if (!social.users.some((user) => user.handle === viewerHandle)) throw new Error('user_missing')
+
+  const now = Date.now()
+  const lastOwnEntry = social.guestbookEntries
+    .filter((entry) => entry.spaceHandle === spaceHandle && entry.nodeId === nodeId && entry.authorHandle === viewerHandle)
+    .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0]
+
+  if (lastOwnEntry && now - Date.parse(lastOwnEntry.createdAt) < 30_000) {
+    throw new Error('guestbook_cooldown')
+  }
+
+  const entry = {
+    id: `guestbook-${randomBytes(8).toString('hex')}`,
+    spaceHandle,
+    nodeId,
+    authorHandle: viewerHandle,
+    body: text,
+    createdAt: new Date(now).toISOString()
+  }
+  const maxEntries = Math.max(1, Math.min(100, Number(node.guestbookMaxEntries ?? 40)))
+  const entriesForOtherNodes = social.guestbookEntries.filter((item) => !(item.spaceHandle === spaceHandle && item.nodeId === nodeId))
+  const entriesForNode = [...social.guestbookEntries.filter((item) => item.spaceHandle === spaceHandle && item.nodeId === nodeId), entry].slice(-maxEntries)
+  const nextSocial = {
+    ...social,
+    guestbookEntries: [...entriesForOtherNodes, ...entriesForNode]
+  }
+
+  writeSocial(nextSocial)
+
+  return {
+    entry: guestbookEntriesForNode(nextSocial, spaceHandle, nodeId, viewerHandle).find((item) => item.id === entry.id),
+    entries: guestbookEntriesForNode(nextSocial, spaceHandle, nodeId, viewerHandle).slice(-maxEntries)
+  }
+}
+
+export function deleteGuestbookEntry(viewerHandle: string, spaceHandle: string, entryId: string) {
+  const social = readSocial()
+  const space = readDb().find((item) => item.handle === spaceHandle)
+  const entry = social.guestbookEntries.find((item) => item.spaceHandle === spaceHandle && item.id === entryId)
+
+  if (!space || !entry) throw new Error('guestbook_entry_missing')
+  if (entry.authorHandle !== viewerHandle && space.handle !== viewerHandle) throw new Error('not_allowed')
+
+  const guestbookEntries = social.guestbookEntries.filter((item) => item.id !== entryId)
+  writeSocial({ ...social, guestbookEntries })
+
+  return {
+    deleted: true,
+    entries: guestbookEntriesForNode({ ...social, guestbookEntries }, spaceHandle, entry.nodeId, viewerHandle)
+  }
+}
+
+function coerceStateValue(value: unknown, fallback: StateValue): StateValue {
+  if (typeof fallback === 'number') {
+    const parsed = Number(value)
+    return Number.isFinite(parsed) ? parsed : fallback
+  }
+
+  if (typeof fallback === 'boolean') {
+    return value === true || value === 'true' || value === '1'
+  }
+
+  return String(value ?? '').slice(0, 120)
+}
+
+export function listGlobalState(spaceHandle: string) {
+  const space = readDb().find((item) => item.handle === spaceHandle)
+  if (!space) throw new Error('space_not_found')
+
+  const social = readSocial()
+  const values = Object.fromEntries(
+    (space.stateVariables ?? [])
+      .filter((variable) => variable.scope === 'global')
+      .map((variable) => {
+        const stored = social.globalState.find((item) => item.spaceHandle === spaceHandle && item.key === variable.key)
+        return [variable.key, stored?.value ?? variable.initialValue]
+      })
+  ) as Record<string, StateValue>
+
+  return { values }
+}
+
+export function updateGlobalState(viewerHandle: string, spaceHandle: string, action: { type?: string; stateKey?: string; value?: StateValue }) {
+  const space = readDb().find((item) => item.handle === spaceHandle)
+  if (!space) throw new Error('space_not_found')
+
+  const variable = (space.stateVariables ?? []).find((item) => item.scope === 'global' && item.key === action.stateKey)
+  if (!variable) throw new Error('state_variable_missing')
+  if (!['set-state', 'toggle-state', 'increment-state'].includes(action.type ?? '')) throw new Error('state_action_not_allowed')
+
+  const social = readSocial()
+  const now = Date.now()
+  const recent = social.stateEvents.find((event) => {
+    return event.spaceHandle === spaceHandle
+      && event.key === variable.key
+      && event.actorHandle === viewerHandle
+      && now - Date.parse(event.createdAt) < 1500
+  })
+  if (recent) throw new Error('state_cooldown')
+
+  const stored = social.globalState.find((item) => item.spaceHandle === spaceHandle && item.key === variable.key)
+  const current = stored?.value ?? variable.initialValue
+  let nextValue: StateValue = current
+
+  if (action.type === 'set-state') {
+    nextValue = coerceStateValue(action.value, variable.initialValue)
+  } else if (action.type === 'toggle-state') {
+    nextValue = !Boolean(current)
+  } else if (action.type === 'increment-state') {
+    const amount = Number(action.value ?? 1)
+    nextValue = Number(current) + (Number.isFinite(amount) ? amount : 1)
+  }
+
+  const globalState = [
+    ...social.globalState.filter((item) => !(item.spaceHandle === spaceHandle && item.key === variable.key)),
+    {
+      spaceHandle,
+      key: variable.key,
+      value: nextValue,
+      updatedAt: new Date(now).toISOString(),
+      updatedBy: viewerHandle
+    }
+  ]
+  const stateEvents = [
+    ...social.stateEvents.filter((event) => now - Date.parse(event.createdAt) < 60_000),
+    {
+      spaceHandle,
+      key: variable.key,
+      actorHandle: viewerHandle,
+      createdAt: new Date(now).toISOString()
+    }
+  ]
+
+  writeSocial({ ...social, globalState, stateEvents })
+
+  return {
+    key: variable.key,
+    value: nextValue,
+    values: listGlobalState(spaceHandle).values
   }
 }
