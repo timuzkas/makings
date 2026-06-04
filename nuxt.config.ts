@@ -21,7 +21,7 @@ export default defineNuxtConfig({
         },
         {
           name: 'description',
-          content: 'A minimal social canvas for fragments, spaces, and playful interaction.'
+          content: 'a free freefrom social network'
         }
       ]
     }
