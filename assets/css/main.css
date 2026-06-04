@@ -308,6 +308,13 @@ button {
   background: transparent !important;
 }
 
+.guestbook-preview-label {
+  align-self: start;
+  justify-self: start;
+  width: 100%;
+  text-align: left;
+}
+
 .snippet-line {
   width: 100%;
   height: 100%;

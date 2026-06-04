@@ -333,7 +333,7 @@ function linePath(node: CanvasNode) {
               </svg>
               <span v-else-if="node.kind === 'text'" class="node-text" v-html="renderRichText(interpolatePreviewText(node.text, fragment))"></span>
               <span v-else-if="node.kind === 'portal'" class="node-portal">{{ interpolatePreviewText(node.text, fragment) }}</span>
-              <span v-else-if="node.kind === 'guestbook'" class="node-label">{{ interpolatePreviewText(node.guestbookPrompt || node.text || 'guestbook', fragment) }}</span>
+              <span v-else-if="node.kind === 'guestbook'" class="node-label guestbook-preview-label">{{ interpolatePreviewText(node.guestbookPrompt || node.text || 'guestbook', fragment) }}</span>
               <NodeMediaContent v-else-if="node.media" :node="node" context="feed" />
               <span v-else class="node-label">{{ interpolatePreviewText(node.text, fragment) }}</span>
             </div>
