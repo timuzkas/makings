@@ -13,6 +13,7 @@ const props = defineProps<{
   authUser?: AuthUser | null
   activeId?: string
   rasterization?: boolean
+  showGroupOutline?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -1450,7 +1451,7 @@ onBeforeUnmount(() => {
           {
             selected: selectedId === node.id,
             'multi-selected': isSelected(node) && selectedId !== node.id,
-            grouped: Boolean(node.groupId),
+            grouped: Boolean(node.groupId) && props.showGroupOutline !== false,
             editable: mode === 'edit',
             interpolated: node.interpolate !== false,
             tilted: props.rasterization !== false && Boolean(node.tiltX || node.tiltY),

@@ -1277,6 +1277,7 @@ onBeforeUnmount(() => {
       :state-variables="space.stateVariables"
       :auth-user="auth.user"
       :rasterization="rasterizationEnabled"
+      :show-group-outline="canEdit"
       @change="setNodes"
       @select="selectNode"
     />
